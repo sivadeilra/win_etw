@@ -1,0 +1,5 @@
+[workspace]
+members = [
+    "win_etw_provider",
+    "win_etw_macros"
+]
