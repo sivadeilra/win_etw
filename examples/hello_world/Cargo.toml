@@ -1,0 +1,13 @@
+[package]
+name = "hello_world"
+version = "0.1.0"
+authors = ["Arlie Davis <ardavis@microsoft.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+win_etw_macros = { path = "../../win_etw_macros" }
+win_etw_provider = { path = "../../win_etw_provider" }
+widestring = "0.4.0"
+winapi = "0.3.8"

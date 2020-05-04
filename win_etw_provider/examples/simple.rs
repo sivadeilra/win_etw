@@ -1,7 +1,9 @@
+/*
 #![allow(unused)]
 
 use atomic_lazy::AtomicLazy;
 use widestring::U16CString;
+use win_etw_macros::define_trace_logging_event;
 use win_etw_provider::*;
 use winapi::shared::guiddef::GUID;
 
@@ -59,15 +61,9 @@ static BUY_ICE_CREAM_EVENT: EventDescriptor = EventDescriptor {
     Version: 0,
 };
 
-
 // _tlgEventMetadata_t
 // EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA
-static BY_ICE_CREATE_EVENT_METADATA: &[u8] = &[
-
-];
-
-
-
+static BY_ICE_CREATE_EVENT_METADATA: &[u8] = &[];
 
 fn main() {
     let provider = EventProvider::register(&PROVIDER_GUID).unwrap();
@@ -94,9 +90,7 @@ fn main() {
     hello_provider.buy_ice_cream(333, 5);
 }
 
-use win_etw_macros::define_trace_logging_event;
-
-define_trace_logging_event!{
+define_trace_logging_event! {
     events HelloWorldProvider {
         fn buy_ice_cream(&self, a: i32, b: u8);
 
@@ -104,3 +98,7 @@ define_trace_logging_event!{
         fn hello_world(&self, message: &str, ints: &[i32], more_ints: &[i32]);
     }
 }
+
+*/
+
+fn main() {}

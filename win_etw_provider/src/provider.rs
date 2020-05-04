@@ -1,5 +1,6 @@
 use core::ffi::c_void;
 use core::marker::PhantomData;
+use core::mem::size_of;
 use core::ptr::null_mut;
 use std::ffi::OsStr;
 use widestring::{U16CStr, U16CString};
@@ -102,7 +103,10 @@ impl EventProvider {
             if error != 0 {
                 println!("EventWrite failed: {}", error);
             } else {
-                println!("EventWrite succeeded, num_data_descriptors = {}", data.len());
+                println!(
+                    "EventWrite succeeded, num_data_descriptors = {}",
+                    data.len()
+                );
             }
         }
     }
@@ -197,7 +201,7 @@ impl<'a> EventDataDescriptor<'a> {
             Self {
                 ptr: s.as_ptr() as usize as u64,
                 size: s.len() as u32,
-                kind: EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA,
+                kind: crate::metadata::EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA,
                 phantom_ref: PhantomData,
             }
         }
@@ -208,7 +212,7 @@ impl<'a> EventDataDescriptor<'a> {
             Self {
                 ptr: s.as_ptr() as usize as u64,
                 size: s.len() as u32,
-                kind: EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA,
+                kind: crate::metadata::EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA,
                 phantom_ref: PhantomData,
             }
         }
@@ -269,6 +273,19 @@ impl<'a> From<&'a U16CStr> for EventDataDescriptor<'a> {
     }
 }
 
+impl<'a> From<&'a GUID> for EventDataDescriptor<'a> {
+    fn from(value: &'a GUID) -> EventDataDescriptor<'a> {
+        unsafe {
+            Self {
+                ptr: value as *const GUID as usize as u64,
+                size: size_of::<GUID>() as u32,
+                kind: 0,
+                phantom_ref: PhantomData,
+            }
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! write_event {
     (
@@ -294,5 +311,3 @@ macro_rules! write_event {
 #[cfg(test)]
 mod tests {}
 
-const EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA: u32 = 2;
-const EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA: u32 = 1;

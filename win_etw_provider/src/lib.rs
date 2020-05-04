@@ -6,5 +6,8 @@
 
 pub mod trace_logging;
 pub mod provider;
+pub mod metadata;
 
 pub use provider::*;
+
+pub mod types;
