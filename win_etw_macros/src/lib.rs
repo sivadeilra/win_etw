@@ -1,3 +1,7 @@
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::cognitive_complexity)]
+#![allow(clippy::single_match)]
+
 extern crate proc_macro;
 
 use proc_macro2::{Span, TokenStream};
@@ -55,7 +59,7 @@ pub fn define_trace_logging_event(input: proc_macro::TokenStream) -> proc_macro:
 }
 
 fn err_spanned<T: quote::ToTokens>(item: &T, msg: &str) -> TokenStream {
-    Error::new_spanned(item, msg).to_compile_error().into()
+    Error::new_spanned(item, msg).to_compile_error()
 }
 
 fn create_provider_metadata(
@@ -224,7 +228,7 @@ fn parse_event_field(
                 // This uses two EVENT_DATA_DESCRIPTOR slots.
                 let field_len_ident = Ident::new(
                     &format!("{}_len_u16", field_name.to_string()),
-                    field_name.span().clone(),
+                    field_name.span(),
                 );
                 statements.extend(quote_spanned! {
                     field_span =>
@@ -241,7 +245,7 @@ fn parse_event_field(
                 // win_etw_provider::types::SocketAddrV4, which does.
                 let field_len_ident = Ident::new(
                     &format!("{}_len_u16", field_name.to_string()),
-                    field_name.span().clone(),
+                    field_name.span(),
                 );
                 statements.extend(quote_spanned! {
                     field_span =>
@@ -259,7 +263,7 @@ fn parse_event_field(
                 // win_etw_provider::types::SocketAddrV6, which does.
                 let field_len_ident = Ident::new(
                     &format!("{}_len_u16", field_name.to_string()),
-                    field_name.span().clone(),
+                    field_name.span(),
                 );
                 statements.extend(quote_spanned! {
                     field_span =>
@@ -275,19 +279,15 @@ fn parse_event_field(
             WellKnownType::SocketAddr => {
                 let field_desc = Ident::new(
                     &format!("{}_desc", field_name.to_string()),
-                    field_name.span().clone(),
+                    field_name.span(),
                 );
-                let field_v4 = Ident::new(
-                    &format!("{}_v4", field_name.to_string()),
-                    field_name.span().clone(),
-                );
-                let field_v6 = Ident::new(
-                    &format!("{}_v6", field_name.to_string()),
-                    field_name.span().clone(),
-                );
+                let field_v4 =
+                    Ident::new(&format!("{}_v4", field_name.to_string()), field_name.span());
+                let field_v6 =
+                    Ident::new(&format!("{}_v6", field_name.to_string()), field_name.span());
                 let field_len_ident = Ident::new(
                     &format!("{}_len_u16", field_name.to_string()),
-                    field_name.span().clone(),
+                    field_name.span(),
                 );
                 statements.extend(quote_spanned! {
                     field_span =>
@@ -374,7 +374,7 @@ fn parse_event_field(
                             // The first is for the length field, the second for the data.
                             let field_len_ident = Ident::new(
                                 &format!("{}_len_u16", field_name.to_string()),
-                                field_name.span().clone(),
+                                field_name.span(),
                             );
                             statements.extend(quote_spanned! {
                                 field_span =>
@@ -458,13 +458,13 @@ fn define_trace_logging_event_impl(
         // Check some requirements for the method signature. If the requirements are not met, we
         // emit an error but keep going. This allows us to report as many errors as possible in
         // each build, rather than having errors "unlocked" one by one.
-        if !method.sig.asyncness.is_none() {
+        if method.sig.asyncness.is_some() {
             errors.push(Error::new(
                 method.span(),
                 "Async event methods are not supported.",
             ));
         }
-        if !method.sig.unsafety.is_none() {
+        if method.sig.unsafety.is_some() {
             errors.push(Error::new(
                 method.span(),
                 "Event methods should not be marked unsafe.",
@@ -740,10 +740,10 @@ fn define_trace_logging_event_impl(
 
                     #statements
 
-                    let mut data_descriptors = [
+                    let data_descriptors = [
                         #data_descriptor_array
                     ];
-                    self.provider.write(&EVENT_DESCRIPTOR, &mut data_descriptors);
+                    self.provider.write(&EVENT_DESCRIPTOR, &data_descriptors);
                 }
             },
         };

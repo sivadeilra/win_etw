@@ -23,7 +23,7 @@ impl From<&std::net::SocketAddrV4> for SocketAddrV4 {
         let port = value.port();
         Self {
             family: AF_INET,
-            address: value.ip().octets().clone(),
+            address: value.ip().octets(),
             port: port.to_be_bytes(),
             zero: [0; 8],
         }
@@ -53,7 +53,7 @@ impl From<&std::net::SocketAddrV6> for SocketAddrV6 {
             family: AF_INET6,
             port: value.port().to_be_bytes(),
             flow_info: value.flowinfo().to_be_bytes(),
-            address: value.ip().octets().clone(),
+            address: value.ip().octets(),
             scope_id: value.scope_id().to_be_bytes(),
         }
     }
@@ -77,7 +77,7 @@ mod std_support {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     /// Time elapsed between the Windows epoch and the UNIX epoch.
-    const WINDOWS_EPOCH_TO_UNIX_EPOCH: Duration = Duration::from_secs(11644473600);
+    const WINDOWS_EPOCH_TO_UNIX_EPOCH: Duration = Duration::from_secs(11_644_473_600);
 
     pub struct OutOfRangeError;
 

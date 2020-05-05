@@ -1,3 +1,5 @@
+#![allow(clippy::unreadable_literal)]
+
 use win_etw_provider::provider::EventProvider;
 use winapi::shared::guiddef::GUID;
 

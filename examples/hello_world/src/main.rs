@@ -1,3 +1,4 @@
+#![allow(clippy::unreadable_literal)]
 #![forbid(unsafe_code)]
 
 use win_etw_macros::define_trace_logging_event;
@@ -37,14 +38,14 @@ fn main() {
     let client_addr_v6 = "[2001:db8::1]:8080".parse::<SocketAddrV6>().unwrap();
     hello_provider.client_connected_v6(&client_addr_v6);
 
-    hello_provider.client_connected(&SocketAddr::V4(client_addr_v4.clone()));
-    hello_provider.client_connected(&SocketAddr::V6(client_addr_v6.clone()));
+    hello_provider.client_connected(&SocketAddr::V4(client_addr_v4));
+    hello_provider.client_connected(&SocketAddr::V6(client_addr_v6));
 
     hello_provider.something_bad_happened("uh oh!");
 
     hello_provider.file_created(SystemTime::now());
     hello_provider.file_created_filetime(FILETIME(
-        (11644473600 + (3 * 365 + 31 + 28 + 31 + 30 + 31 + 15) * 86400) * 1_000_000_0,
+        (11644473600 + (3 * 365 + 31 + 28 + 31 + 30 + 31 + 15) * 86400) * 10_000_000,
     ));
 
     hello_provider.arg_u32_hex(0xcafef00d);
