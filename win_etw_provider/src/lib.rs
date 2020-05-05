@@ -4,10 +4,11 @@
 
 #![allow(unused)]
 
-pub mod trace_logging;
+pub mod guid;
 pub mod provider;
-pub mod metadata;
+pub mod trace_logging;
+pub mod types;
 
 pub use provider::*;
 
-pub mod types;
+pub use win_etw_metadata as metadata;

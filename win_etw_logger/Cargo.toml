@@ -1,5 +1,5 @@
 [package]
-name = "win_etw_provider"
+name = "win_etw_logger"
 version = "0.1.0"
 authors = ["Arlie Davis <ardavis@microsoft.com>"]
 edition = "2018"
@@ -7,15 +7,8 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-winapi = { version = "0.3.8", features = ["evntprov", "winerror"] }
-widestring = "0.4.0"
-zerocopy = "0.3.0"
+log = { version = "0.4.8", features = ["std"] }
+win_etw_provider = { path = "../win_etw_provider" }
 win_etw_macros = { path = "../win_etw_macros" }
 win_etw_metadata = { path = "../win_etw_metadata" }
-
-[dev-dependencies]
-atomic_lazy = { git = "https://github.com/sivadeilra/atomic_lazy" }
-
-[features]
-std = []
-default = ["std"]
+winapi = { version = "0.3.8" }

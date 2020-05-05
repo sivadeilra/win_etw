@@ -13,3 +13,4 @@ proc-macro = true
 proc-macro2 = "1.0.9"
 syn = { version = "1.0.18", features = ["full", "extra-traits"] }
 quote = "1.0.3"
+win_etw_metadata = { path = "../win_etw_metadata" }

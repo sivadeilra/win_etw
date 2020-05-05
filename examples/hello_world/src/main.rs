@@ -1,54 +1,23 @@
+#![forbid(unsafe_code)]
+
 use win_etw_macros::define_trace_logging_event;
 
 // use widestring::U16CString;
+use win_etw_provider::guid;
+use win_etw_provider::types::FILETIME;
 use win_etw_provider::*;
-use winapi::shared::guiddef::GUID;
+
 use std::time::SystemTime;
-
-macro_rules! guid {
-    (
-        $a:expr,
-        $b:expr,
-        $c:expr,
-        $d:expr
-    ) => {
-        winapi::shared::guiddef::GUID {
-            Data1: $a,
-            Data2: $b,
-            Data3: $c,
-            Data4: $d,
-        }
-    };
-
-    (
-        $a:expr,
-        $b:expr,
-        $c:expr,
-        $d0:expr,
-        $d1:expr,
-        $d2:expr,
-        $d3:expr,
-        $d4:expr,
-        $d5:expr,
-        $d6:expr,
-        $d7:expr
-    ) => {
-        winapi::shared::guiddef::GUID {
-            Data1: $a,
-            Data2: $b,
-            Data3: $c,
-            Data4: [$d0, $d1, $d2, $d3, $d4, $d5, $d6, $d7],
-        }
-    };
-}
+use winapi::shared::guiddef::GUID;
+use winapi::shared::ntstatus;
+use winapi::shared::winerror;
 
 // {861A3948-3B6B-4DDF-B862-B2CB361E238E}
 // DEFINE_GUID(my_provider_guid, 0x861a3948, 0x3b6b, 0x4ddf, 0xb8, 0x62, 0xb2, 0xcb, 0x36, 0x1e, 0x23, 0x8e);
 const PROVIDER_GUID: GUID =
     guid!(0x861a3948, 0x3b6b, 0x4ddf, 0xb8, 0x62, 0xb2, 0xcb, 0x36, 0x1e, 0x23, 0x8e);
 
-use std::net::{SocketAddrV4, Ipv4Addr, SocketAddrV6, SocketAddr};
-
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 fn main() {
     let provider = EventProvider::register(&PROVIDER_GUID).unwrap();
@@ -74,15 +43,24 @@ fn main() {
     hello_provider.something_bad_happened("uh oh!");
 
     hello_provider.file_created(SystemTime::now());
+    hello_provider.file_created_filetime(FILETIME(
+        (11644473600 + (3 * 365 + 31 + 28 + 31 + 30 + 31 + 15) * 86400) * 1_000_000_0,
+    ));
+
+    hello_provider.arg_u32_hex(0xcafef00d);
+
+    hello_provider.arg_hresult(winerror::DXGI_DDI_ERR_WASSTILLDRAWING);
+    hello_provider.arg_ntstatus(ntstatus::STATUS_DEVICE_REQUIRES_CLEANING as u32);
+    hello_provider.arg_win32error(winerror::ERROR_OUT_OF_PAPER);
 }
 
-define_trace_logging_event!{
+define_trace_logging_event! {
     events HelloWorldProvider {
         /// Writes down that time that we bought ice cream.
         // fn buy_ice_cream(&self, a: i32, b: u8);
 
         // fn arg_i32(&self, a: i32);
-        
+
         /// Log a floating point value.
         #[event(level = "info")]
         fn arg_f32(&self, a: f32);
@@ -108,14 +86,29 @@ define_trace_logging_event!{
         fn client_connected(&self, client_addr: &SocketAddr);
 
         fn file_created(&self, create_time: SystemTime);
-        
+
+        fn file_created_filetime(&self, t: FILETIME);
+
+        fn arg_bool(&self, a: bool);
+
+        fn arg_usize(&self, a: usize);
+        fn arg_isize(&self, a: isize);
+
+        fn arg_u32_hex(
+            &self,
+            #[event(output = "hex")]
+            a: u32);
+
+        fn arg_hresult(&self, a: HRESULT);
+        fn arg_ntstatus(&self, a: NTSTATUS);
+        fn arg_win32error(&self, a: WIN32ERROR);
 
         // foo: [i32; 4]
         // fn hello_world(&self, message: &str, ints: &[i32], more_ints: &[i32]);
     }
 }
 
-define_trace_logging_event!{
+define_trace_logging_event! {
     events AnotherFineProvider {
         fn arg_str(&self, arg: &str);
     }

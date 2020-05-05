@@ -1,27 +1,16 @@
 extern crate proc_macro;
 
-use quote::quote;
-use quote::ToTokens;
+use proc_macro2::{Span, TokenStream};
+use quote::{quote, quote_spanned, ToTokens};
 use std::iter::Extend;
 use syn::braced;
 use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, parse_quote, Error, Expr, ExprLit, Ident, Lit, Token};
-use syn::{FnArg, ImplItemMethod, Pat, Path, Stmt, TraitItemMethod, Type, TypePath};
-
-use proc_macro2::TokenStream;
-
-/*
-
-define_trace_logging_event!{
-
-    $name {
-        fn some_method(args: types);
-    }
-}
-
-
-*/
+use syn::{
+    parse_macro_input, parse_quote, Attribute, Error, Expr, ExprLit, FnArg, Ident, ImplItemMethod,
+    Lit, Meta, MetaNameValue, NestedMeta, Pat, Path, TraitItemMethod, Type,
+};
+use win_etw_metadata::{InFlag, OutFlag};
 
 struct TraceLoggingDef {
     provider_name: Ident,
@@ -100,16 +89,40 @@ fn create_provider_metadata(
     }
 }
 
+fn append_utf8_str_chars(output: &mut Vec<Expr>, s: &str, span: Span) {
+    // event_metadata.extend_from_slice(param_name_string.as_bytes());
+    for c in s.chars() {
+        if s.is_ascii() {
+            output.push(syn::Expr::Lit(syn::ExprLit {
+                attrs: Vec::new(),
+                lit: Lit::Byte(syn::LitByte::new(c as u8, span)),
+                // lit: parse_quote!{ #c as u8 },
+                // lit: Lit::Char(syn::LitChar::new(c, span)),
+            }));
+        } else {
+            // This can be implemented, just isn't yet.
+            unimplemented!("non-ascii text in string");
+        }
+    }
+    // Add the NUL byte at the end.
+    output.push(parse_quote! { 0 });
+}
+
 struct UnsupportedField;
 
+///
+/// * `event_metadata`: This builds the static [u8; N] array that contains the metadata for this
+///   event. It can contain literals, symbolic expressions, etc.
 fn parse_event_field(
-    _errors: &mut Vec<Error>,
+    errors: &mut Vec<Error>,
     well_known_types: &WellKnownTypes,
+    event_attr: Option<&Attribute>,
+    field_span: proc_macro2::Span,
     field_name: &Ident,
-    field_ty: &Type,
+    field_ty: &mut Type,
     data_descriptor_array: &mut TokenStream,
-    event_metadata: &mut Vec<u8>,
-    statements: &mut Vec<Stmt>,
+    event_metadata: &mut Vec<syn::Expr>,
+    statements: &mut TokenStream,
 ) -> Result<(), UnsupportedField> {
     // Write the field metadata.
     // // FieldMetadata:
@@ -124,213 +137,285 @@ fn parse_event_field(
     //     char TypeInfo[TypeInfoSize]; // Only present if (InType & CountMask) == Custom.
     // };
 
-    // println!("param name: {:?}", field_name.to_string());
-
     let param_name_string = field_name.to_string();
-    event_metadata.extend_from_slice(param_name_string.as_bytes());
-    event_metadata.push(0);
+    append_utf8_str_chars(event_metadata, &param_name_string, field_span);
     // We will append more data to event_metadata, below.
 
-    let field_metadata_intype: u8;
-    let mut field_metadata_out_type: Option<u8> = None;
-
-    let t = well_known_types.find(&*field_ty);
-
-    // Some types need some preprocessing.
-    if let Some(t) = t {
-        match t.code {
-            WellKnownType::SocketAddrV4 => {}
-            _ => {}
+    // The user can annotate fields with #[event(...)] in order to specify output formats.
+    let mut output_hex = false;
+    if let Some(event_attr) = event_attr {
+        match event_attr.parse_meta() {
+            Ok(Meta::List(list)) => {
+                for item in list.nested.iter() {
+                    match item {
+                        syn::NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+                            path, lit, ..
+                        })) => {
+                            if *path == parse_quote!(output) {
+                                match &lit {
+                                    Lit::Str(lit) => {
+                                        let output_string = lit.value();
+                                        match output_string.as_str() {
+                                            "hex" => {
+                                                output_hex = true;
+                                            }
+                                            _ => {
+                                                errors.push(Error::new(
+                                                    path.span(),
+                                                    "Output format is not recognized.",
+                                                ));
+                                            }
+                                        }
+                                    }
+                                    _ => errors.push(Error::new(
+                                        path.span(),
+                                        "This metadata is expected to be a string.",
+                                    )),
+                                }
+                            } else {
+                                errors.push(Error::new(
+                                    path.span(),
+                                    "This metadata key is not recognized.",
+                                ));
+                            }
+                        }
+                        _ => errors.push(Error::new(
+                            item.span(),
+                            "This metadata item is not recognized.",
+                        )),
+                    }
+                }
+            }
+            Ok(_) => errors.push(Error::new(
+                event_attr.span(),
+                "This metadata is not recognized.",
+            )),
+            Err(e) => {
+                errors.push(e);
+            }
         }
     }
 
-    match (&*field_ty, t) {
-        (_, Some(t)) => {
-            match t.code {
-                WellKnownType::ref_str => {
-                    // We encode &str as COUNTEDANSISTRING (so that we do not need
-                    // a NUL-terminated string) and marking its output type as UTF-8.
-                    // This uses two EVENT_DATA_DESCRIPTOR slots.
-                    let field_len_ident = Ident::new(
-                        &format!("{}_len_u16", field_name.to_string()),
-                        field_name.span().clone(),
-                    );
-                    statements.push(parse_quote! {
-                        let #field_len_ident: u16 = #field_name.len() as u16;
-                    });
-                    data_descriptor_array.extend(quote! {
-                        EventDataDescriptor::from(&#field_len_ident),
+    let mut field_metadata_intype: Expr;
+    let mut field_metadata_out_type: Option<Expr> = None;
+
+    if let Some(t) = well_known_types.find(&*field_ty) {
+        field_metadata_intype = if let Some(in_type_expr) = t.opts.in_type_expr.as_ref() {
+            in_type_expr.clone()
+        } else {
+            let in_type: u8 = t.in_type.bits();
+            parse_quote!(#in_type)
+        };
+
+        if let Some(out_type) = t.opts.out_type {
+            let out_type: u8 = out_type.bits();
+            field_metadata_out_type = Some(parse_quote!(#out_type));
+        } else {
+            field_metadata_out_type = None;
+        }
+
+        if let Some(r) = t.opts.replacement_type.as_ref() {
+            *field_ty = r.clone();
+        }
+        match t.code {
+            WellKnownType::ref_str => {
+                // We encode &str as COUNTEDANSISTRING (so that we do not need
+                // a NUL-terminated string) and marking its output type as UTF-8.
+                // This uses two EVENT_DATA_DESCRIPTOR slots.
+                let field_len_ident = Ident::new(
+                    &format!("{}_len_u16", field_name.to_string()),
+                    field_name.span().clone(),
+                );
+                statements.extend(quote_spanned! {
+                    field_span =>
+                    let #field_len_ident: u16 = #field_name.len() as u16;
+                });
+                data_descriptor_array.extend(quote! {
+                    EventDataDescriptor::from(&#field_len_ident),
+                    EventDataDescriptor::from(#field_name),
+                });
+            }
+            WellKnownType::SocketAddrV4 => {
+                // We cannot simply pass a copy of std::net::SocketAddrV4 to ETW because it does
+                // not have a guaranteed memory layout. So we convert it to
+                // win_etw_provider::types::SocketAddrV4, which does.
+                let field_len_ident = Ident::new(
+                    &format!("{}_len_u16", field_name.to_string()),
+                    field_name.span().clone(),
+                );
+                statements.extend(quote_spanned! {
+                    field_span =>
+                    let #field_name = ::win_etw_provider::types::SocketAddrV4::from(#field_name);
+                    let #field_len_ident: u16 = (::core::mem::size_of::<::win_etw_provider::types::SocketAddrV4>()) as u16;
+                });
+                data_descriptor_array.extend(quote! {
+                    EventDataDescriptor::from(&#field_len_ident),
+                    EventDataDescriptor::from(&#field_name),
+                });
+            }
+            WellKnownType::SocketAddrV6 => {
+                // We cannot simply pass a copy of std::net::SocketAddrV6 to ETW because it does
+                // not have a guaranteed memory layout. So we convert it to
+                // win_etw_provider::types::SocketAddrV6, which does.
+                let field_len_ident = Ident::new(
+                    &format!("{}_len_u16", field_name.to_string()),
+                    field_name.span().clone(),
+                );
+                statements.extend(quote_spanned! {
+                    field_span =>
+                    let #field_name = ::win_etw_provider::types::SocketAddrV6::from(#field_name);
+                    let #field_len_ident: u16 = (::core::mem::size_of::<::win_etw_provider::types::SocketAddrV6>()) as u16;
+                });
+                data_descriptor_array.extend(quote_spanned! {
+                    field_span =>
+                    EventDataDescriptor::from(&#field_len_ident),
+                    EventDataDescriptor::from(&#field_name),
+                });
+            }
+            WellKnownType::SocketAddr => {
+                let field_desc = Ident::new(
+                    &format!("{}_desc", field_name.to_string()),
+                    field_name.span().clone(),
+                );
+                let field_v4 = Ident::new(
+                    &format!("{}_v4", field_name.to_string()),
+                    field_name.span().clone(),
+                );
+                let field_v6 = Ident::new(
+                    &format!("{}_v6", field_name.to_string()),
+                    field_name.span().clone(),
+                );
+                let field_len_ident = Ident::new(
+                    &format!("{}_len_u16", field_name.to_string()),
+                    field_name.span().clone(),
+                );
+                statements.extend(quote_spanned! {
+                    field_span =>
+                    let #field_v4;
+                    let #field_v6;
+                    let #field_len_ident;
+                    let #field_desc;
+                    match #field_name {
+                        ::std::net::SocketAddr::V4(ref address_v4) => {
+                            #field_v4 = ::win_etw_provider::types::SocketAddrV4::from(address_v4);
+                            #field_len_ident = ::core::mem::size_of::<::win_etw_provider::types::SocketAddrV4>() as u16;
+                            #field_desc = EventDataDescriptor::from(&#field_v4);
+                        }
+                        ::std::net::SocketAddr::V6(ref address_v6) => {
+                            #field_v6 = ::win_etw_provider::types::SocketAddrV6::from(address_v6);
+                            #field_len_ident = ::core::mem::size_of::<::win_etw_provider::types::SocketAddrV6>() as u16;
+                            #field_desc = EventDataDescriptor::from(&#field_v6);
+                        }
+                    }
+                });
+                data_descriptor_array.extend(quote_spanned! {
+                    field_span =>
+                    EventDataDescriptor::from(&#field_len_ident),
+                    #field_desc,
+                });
+            }
+            WellKnownType::SystemTime => {
+                // If the SystemTime value cannot be converted to a FILETIME, then the data
+                // descriptor for this field will be empty, rather than pointing to an invalid
+                // or incorrect time value.
+                statements.extend(quote_spanned!{
+                    field_span =>
+                    let #field_name = <::win_etw_provider::types::FILETIME as ::core::convert::TryFrom<::std::time::SystemTime>>
+                    ::try_from(#field_name);
+                });
+                data_descriptor_array.extend(quote_spanned! {
+                    field_span =>
+                    match &#field_name {
+                        Ok(ref t) => EventDataDescriptor::from(&t.0),
+                        Err(_) => EventDataDescriptor::empty(),
+                    }
+                });
+            }
+            WellKnownType::FILETIME => {
+                data_descriptor_array.extend(quote_spanned! {
+                    field_span =>
+                    EventDataDescriptor::from(&#field_name.0),
+                });
+            }
+            WellKnownType::bool => {
+                statements.extend(quote_spanned! {
+                    field_span =>
+                    let #field_name: i8 = #field_name as i8;
+                });
+                data_descriptor_array.extend(quote! {
+                    EventDataDescriptor::from(&#field_name),
+                });
+            }
+            _ => {
+                if t.is_ref {
+                    data_descriptor_array.extend(quote_spanned! {
+                        field_span =>
                         EventDataDescriptor::from(#field_name),
                     });
-                    field_metadata_intype = t.in_type;
-                    field_metadata_out_type = t.out_type;
-                }
-                WellKnownType::SocketAddrV4 => {
-                    // We cannot simply pass a copy of std::net::SocketAddrV4 to ETW because it does
-                    // not have a guaranteed memory layout. So we convert it to
-                    // win_etw_provider::types::SocketAddrV4, which does.
-                    let field_len_ident = Ident::new(
-                        &format!("{}_len_u16", field_name.to_string()),
-                        field_name.span().clone(),
-                    );
-                    statements.push(parse_quote! {
-                        let #field_name = ::win_etw_provider::types::SocketAddrV4::from(#field_name);
-                    });
-                    statements.push(parse_quote! {
-                        let #field_len_ident: u16 = (::core::mem::size_of::<::win_etw_provider::types::SocketAddrV4>()) as u16;
-                    });
-                    data_descriptor_array.extend(quote! {
-                        EventDataDescriptor::from(&#field_len_ident),
+                } else {
+                    data_descriptor_array.extend(quote_spanned! {
+                        field_span =>
                         EventDataDescriptor::from(&#field_name),
                     });
-                    field_metadata_intype = t.in_type;
-                    field_metadata_out_type = t.out_type;
-                }
-                WellKnownType::SocketAddrV6 => {
-                    // We cannot simply pass a copy of std::net::SocketAddrV6 to ETW because it does
-                    // not have a guaranteed memory layout. So we convert it to
-                    // win_etw_provider::types::SocketAddrV6, which does.
-                    let field_len_ident = Ident::new(
-                        &format!("{}_len_u16", field_name.to_string()),
-                        field_name.span().clone(),
-                    );
-                    statements.push(parse_quote! {
-                        let #field_name = ::win_etw_provider::types::SocketAddrV6::from(#field_name);
-                    });
-                    statements.push(parse_quote! {
-                        let #field_len_ident: u16 = (::core::mem::size_of::<::win_etw_provider::types::SocketAddrV6>()) as u16;
-                    });
-                    data_descriptor_array.extend(quote! {
-                        EventDataDescriptor::from(&#field_len_ident),
-                        EventDataDescriptor::from(&#field_name),
-                    });
-                    field_metadata_intype = t.in_type;
-                    field_metadata_out_type = t.out_type;
-                }
-                WellKnownType::SocketAddr => {
-                    let field_desc = Ident::new(
-                        &format!("{}_desc", field_name.to_string()),
-                        field_name.span().clone(),
-                    );
-                    let field_v4 = Ident::new(
-                        &format!("{}_v4", field_name.to_string()),
-                        field_name.span().clone(),
-                    );
-                    let field_v6 = Ident::new(
-                        &format!("{}_v6", field_name.to_string()),
-                        field_name.span().clone(),
-                    );
-                    let field_len_ident = Ident::new(
-                        &format!("{}_len_u16", field_name.to_string()),
-                        field_name.span().clone(),
-                    );
-
-                    statements.push(parse_quote! { let #field_v4; });
-                    statements.push(parse_quote! { let #field_v6; });
-
-                    statements.push(parse_quote! {
-                        let (#field_desc, #field_len_ident) = match #field_name {
-                            ::std::net::SocketAddr::V4(ref address_v4) => {
-                                #field_v4 = ::win_etw_provider::types::SocketAddrV4::from(address_v4);
-                                (
-                                    EventDataDescriptor::from(&#field_v4),                                
-                                    ::core::mem::size_of::<::win_etw_provider::types::SocketAddrV4>() as u16                                
-                                )
-                            }
-                            ::std::net::SocketAddr::V6(ref address_v6) => {
-                                #field_v6 = ::win_etw_provider::types::SocketAddrV6::from(address_v6);
-                                (
-                                    EventDataDescriptor::from(&#field_v6),                                
-                                    ::core::mem::size_of::<::win_etw_provider::types::SocketAddrV6>() as u16                                
-                                )
-                            }
-                        };
-                    });
-
-                    data_descriptor_array.extend(quote! {
-                        EventDataDescriptor::from(&#field_len_ident),
-                        #field_desc,
-                    });
-                    field_metadata_intype = t.in_type;
-                    field_metadata_out_type = t.out_type;
-                }
-
-                WellKnownType::SystemTime => {
-                    statements.push(parse_quote!{
-                        let #field_name: u64 = {
-                            let unix_elapsed = #field_name.duration_since(::std::time::UNIX_EPOCH).unwrap();
-                            /// Time elapsed between the Windows epoch and the UNIX epoch.
-                            const WINDOWS_EPOCH_TO_UNIX_EPOCH: ::std::time::Duration =
-                                ::std::time::Duration::from_secs(11644473600);
-                            let windows_elapsed = unix_elapsed + WINDOWS_EPOCH_TO_UNIX_EPOCH;
-                            (windows_elapsed.as_nanos() / 100) as u64
-                        };
-                    });
-                    data_descriptor_array.extend(quote! {
-                        EventDataDescriptor::from(&#field_name),
-                    });
-                    field_metadata_intype = t.in_type;
-                    field_metadata_out_type = t.out_type;
-                }
-
-                _ => {
-                    if t.is_ref {
-                        data_descriptor_array.extend(quote! {
-                            EventDataDescriptor::from(#field_name),
-                        });
-                    } else {
-                        data_descriptor_array.extend(quote! {
-                            EventDataDescriptor::from(&#field_name),
-                        });
-                    }
-                    field_metadata_intype = t.in_type;
                 }
             }
         }
-        (Type::Reference(ref_ty), None) => {
-            match &*ref_ty.elem {
-                Type::Slice(slice_ty) => {
-                    if let Some(t) = well_known_types.find(&slice_ty.elem) {
-                        if !t.primitive {
+    } else {
+        match &*field_ty {
+            Type::Reference(ref_ty) => {
+                match &*ref_ty.elem {
+                    Type::Slice(slice_ty) => {
+                        if let Some(t) = well_known_types.find(&slice_ty.elem) {
+                            if !t.primitive {
+                                return Err(UnsupportedField);
+                            }
+                            // println!("slice type, with element: {:?}", slice_ty.elem);
+                            // Slices are encoded using two data descriptors.
+                            // The first is for the length field, the second for the data.
+                            let field_len_ident = Ident::new(
+                                &format!("{}_len_u16", field_name.to_string()),
+                                field_name.span().clone(),
+                            );
+                            statements.extend(quote_spanned! {
+                                field_span =>
+                                let #field_name = &#field_name[..#field_name.len().min(0xffff)];
+                                let #field_len_ident: u16 = #field_name.len() as u16;
+                            });
+                            data_descriptor_array.extend(quote! {
+                                EventDataDescriptor::from(&#field_len_ident),
+                                EventDataDescriptor::from(#field_name),
+                            });
+                            // 0x40 is VCOUNT flag
+                            let in_type_u8 = t.in_type.bits();
+                            field_metadata_intype = parse_quote!(#in_type_u8);
+                            field_metadata_intype = parse_quote!(#field_metadata_intype | ::win_etw_provider::metadata::InFlag::VCOUNT_FLAG.bits());
+                        } else {
                             return Err(UnsupportedField);
                         }
-
-                        // println!("slice type, with element: {:?}", slice_ty.elem);
-                        // Slices are encoded using two data descriptors.
-                        // The first is for the length field, the second for the data.
-
-                        let field_len_ident = Ident::new(
-                            &format!("{}_len_u16", field_name.to_string()),
-                            field_name.span().clone(),
-                        );
-                        statements.push(parse_quote! {
-                            let #field_name = &#field_name[..#field_name.len().min(0xffff)];
-                        });
-                        statements.push(parse_quote! {
-                            let #field_len_ident: u16 = #field_name.len() as u16;
-                        });
-                        data_descriptor_array.extend(quote! {
-                            EventDataDescriptor::from(&#field_len_ident),
-                            EventDataDescriptor::from(#field_name),
-                        });
-                        // 0x40 is VCOUNT flag
-                        field_metadata_intype = t.in_type | 0x40;
-                    } else {
+                    }
+                    _ => {
                         return Err(UnsupportedField);
                     }
                 }
-                _ => {
-                    return Err(UnsupportedField);
-                }
             }
-        }
-        _ => {
-            return Err(UnsupportedField);
+            _ => {
+                return Err(UnsupportedField);
+            }
         }
     }
 
+    if output_hex {
+        let hex: Expr = parse_quote!(::win_etw_provider::metadata::OutFlag::HEX.bits());
+        field_metadata_out_type = Some(if let Some(out_type) = field_metadata_out_type {
+            parse_quote!(#out_type | #hex)
+        } else {
+            hex
+        });
+    }
+
     if let Some(out_type) = field_metadata_out_type {
-        event_metadata.push(field_metadata_intype | TLG_IN_CHAIN_FLAG);
+        field_metadata_intype = parse_quote!(#field_metadata_intype | ::win_etw_provider::metadata::InFlag::CHAIN_FLAG.bits());
+        event_metadata.push(field_metadata_intype);
         event_metadata.push(out_type);
     } else {
         event_metadata.push(field_metadata_intype);
@@ -343,7 +428,7 @@ fn define_trace_logging_event_impl(
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     // let input: proc_macro2::TokenStream = input.into();
-    let logging_def = parse_macro_input!(input as TraceLoggingDef);
+    let mut logging_def = parse_macro_input!(input as TraceLoggingDef);
 
     let provider_name = &logging_def.provider_name;
 
@@ -367,15 +452,12 @@ fn define_trace_logging_event_impl(
 
     let mut output_methods = TokenStream::new();
 
-    for (method_index, method) in logging_def.methods.iter().enumerate() {
-        // println!("method: {:?} ---------------------", method.sig.ident);
-
+    for (method_index, method) in logging_def.methods.iter_mut().enumerate() {
         let event_id = method_index as u16;
 
-        // Analyze the signature. Generate metadata for the parameters.
-
         // Check some requirements for the method signature. If the requirements are not met, we
-        // emit an error but keep going. This allows us to report
+        // emit an error but keep going. This allows us to report as many errors as possible in
+        // each build, rather than having errors "unlocked" one by one.
         if !method.sig.asyncness.is_none() {
             errors.push(Error::new(
                 method.span(),
@@ -385,7 +467,7 @@ fn define_trace_logging_event_impl(
         if !method.sig.unsafety.is_none() {
             errors.push(Error::new(
                 method.span(),
-                "Unsafe event methods are not supported.",
+                "Event methods should not be marked unsafe.",
             ));
         }
 
@@ -408,20 +490,20 @@ fn define_trace_logging_event_impl(
 
         // See comments in traceloggingprovider.h, around line 2300, which describe the
         // encoding of the event mdata.
-        let mut event_metadata: Vec<u8> = Vec::new();
-        event_metadata.push(0); // reserve space for the size
-        event_metadata.push(0);
-        event_metadata.push(0); // no extensions
-        event_metadata.extend_from_slice(event_name.as_bytes());
-        event_metadata.push(0);
+        let mut event_metadata: Vec<Expr> = Vec::new();
+        event_metadata.push(parse_quote! { 0 }); // reserve space for the size
+        event_metadata.push(parse_quote! { 0 });
+        event_metadata.push(parse_quote! { 0 }); // no extensions
+        append_utf8_str_chars(&mut event_metadata, &event_name, method.span());
 
         // Some fields require running some code before building the data descriptors, so we
         // collect statements here.
-        let mut statements: Vec<Stmt> = Vec::new();
+        let mut statements: TokenStream = TokenStream::new();
 
         // Each parameter (except for &self) becomes an event field.
         let mut found_receiver = false;
-        for param in method.sig.inputs.iter() {
+        for param in method.sig.inputs.iter_mut() {
+            let param_span = param.span();
             match param {
                 FnArg::Receiver(syn::Receiver {
                     mutability: None,
@@ -441,12 +523,21 @@ fn define_trace_logging_event_impl(
                 }
 
                 FnArg::Typed(param_typed) => {
-                    if !param_typed.attrs.is_empty() {
-                        errors.push(Error::new(
-                            param.span(),
-                            "Attributes on event methods are not supported.",
-                        ));
-                    }
+                    let mut event_attr: Option<Attribute> = None;
+                    param_typed.attrs.retain(|a| {
+                        if a.path == parse_quote!(event) {
+                            event_attr = Some(a.clone());
+                            false
+                        } else if a.path == parse_quote!(doc) {
+                            true
+                        } else {
+                            errors.push(Error::new_spanned(
+                                a,
+                                "This attribute is not permitted on event fields.",
+                            ));
+                            true
+                        }
+                    });
                     let param_name: &Ident = match &*param_typed.pat {
                         Pat::Ident(ref name) => &name.ident,
                         _ => {
@@ -461,8 +552,10 @@ fn define_trace_logging_event_impl(
                     if parse_event_field(
                         errors,
                         &wk,
+                        event_attr.as_ref(),
+                        param_span,
                         &param_name,
-                        &param_typed.ty,
+                        &mut *param_typed.ty,
                         &mut data_descriptor_array,
                         &mut event_metadata,
                         &mut statements,
@@ -474,11 +567,7 @@ fn define_trace_logging_event_impl(
                             "This type is not supported for event parameters.",
                         ));
                     }
-                } /*
-                  _ => {
-                      errors.push(Error::new_spanned(&param, "Unrecognized parameter type"));
-                  }
-                  */
+                }
             }
         }
 
@@ -499,8 +588,10 @@ fn define_trace_logging_event_impl(
             continue;
         }
 
-        event_metadata[0] = (event_metadata_len & 0xff) as u8;
-        event_metadata[1] = (event_metadata_len >> 8) as u8;
+        let event_metadata_len_b0 = (event_metadata_len & 0xff) as u8;
+        let event_metadata_len_b1 = (event_metadata_len >> 8) as u8;
+        event_metadata[0] = parse_quote! { #event_metadata_len_b0 };
+        event_metadata[1] = parse_quote! { #event_metadata_len_b1 };
 
         let doc_path: Path = parse_quote!(doc);
         let event_path: Path = parse_quote!(event);
@@ -523,36 +614,43 @@ fn define_trace_logging_event_impl(
             } else if attr.path == event_path {
                 // The #[event] attribute lets the application specify the level, opcode, task,
                 // keyword, etc.
-
                 match attr.parse_meta() {
                     Ok(syn::Meta::List(list)) => {
-                        // println!("found meta list: {:?}", list);
-
                         for item in list.nested.iter() {
-                            // println!("item: {:?}", item);
                             match item {
-                                syn::NestedMeta::Meta(syn::Meta::NameValue(
-                                    syn::MetaNameValue { path, lit, .. },
-                                )) => {
+                                NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+                                    path,
+                                    lit,
+                                    ..
+                                })) => {
                                     if *path == level_path {
-                                        // println!("  level: {:?}", lit);
                                         match lit {
                                             Lit::Str(lit_str) => match lit_str.value().as_str() {
-                                                "error" => event_level = parse_quote!(
+                                                "error" => {
+                                                    event_level = parse_quote!(
                                                     ::win_etw_provider::metadata::EVENT_LEVEL_ERROR
-                                                ),
-                                                "warn" => event_level = parse_quote!(
+                                                )
+                                                }
+                                                "warn" => {
+                                                    event_level = parse_quote!(
                                                     ::win_etw_provider::metadata::EVENT_LEVEL_WARN
-                                                ),
-                                                "info" => event_level = parse_quote!(
+                                                )
+                                                }
+                                                "info" => {
+                                                    event_level = parse_quote!(
                                                     ::win_etw_provider::metadata::EVENT_LEVEL_INFO
-                                                ),
-                                                "debug" => event_level = parse_quote!(
+                                                )
+                                                }
+                                                "debug" => {
+                                                    event_level = parse_quote!(
                                                     ::win_etw_provider::metadata::EVENT_LEVEL_DEBUG
-                                                ),
-                                                "trace" => event_level = parse_quote!(
+                                                )
+                                                }
+                                                "trace" => {
+                                                    event_level = parse_quote!(
                                                     ::win_etw_provider::metadata::EVENT_LEVEL_TRACE
-                                                ),
+                                                )
+                                                }
                                                 _ => {
                                                     errors.push(Error::new_spanned(item, "The value specified for 'level' is not a valid string."));
                                                 }
@@ -624,7 +722,7 @@ fn define_trace_logging_event_impl(
                     const EVENT_OPCODE: u8 = #event_opcode;
                     const EVENT_TASK: u16 = #event_task;
 
-                                // This places the EVENT_METADATA into a read-only linker section, properly
+                    // This places the EVENT_METADATA into a read-only linker section, properly
                     // ordered with respect to TRACE_LOGGING_METADATA and other related sections.
                     #[link_section = ".rdata$etw1"]
                     #[used]
@@ -640,7 +738,7 @@ fn define_trace_logging_event_impl(
                         Keyword: 0,
                     };
 
-                    #( #statements )*
+                    #statements
 
                     let mut data_descriptors = [
                         #data_descriptor_array
@@ -661,7 +759,6 @@ fn define_trace_logging_event_impl(
         impl #provider_name {
             #output_methods
         }
-
     });
 
     output.into()
@@ -670,18 +767,30 @@ fn define_trace_logging_event_impl(
 struct WellKnownTypeInfo {
     ty: Type,
     code: WellKnownType,
-    in_type: u8,
-    out_type: Option<u8>,
+    in_type: InFlag,
     is_ref: bool,
     primitive: bool,
+    opts: WellKnownTypeOptions,
+}
+
+#[derive(Default)]
+struct WellKnownTypeOptions {
+    out_type: Option<OutFlag>,
+    in_type_expr: Option<Expr>,
+    replacement_type: Option<syn::Type>,
+    #[allow(unused)]
+    can_output_hex: bool,
 }
 
 macro_rules! well_known_types{
     (
         $(
-            $t:ident: $tt:ty, {
-                $($k:ident: $v:expr,)*
-            };
+            $t:ident: $tt:ty => {
+                is_ref: $is_ref:expr,
+                primitive: $primitive:expr,
+                in_type: $in_type:expr,
+                $( $opt_name:ident: $opt_value:expr,  )*
+            }
         )*
     ) => {
         #[allow(non_camel_case_types)]
@@ -704,7 +813,14 @@ macro_rules! well_known_types{
                         $t: WellKnownTypeInfo {
                             ty: parse_quote!( $tt ),
                             code: WellKnownType::$t,
-                            $($k: $v,)*
+                            is_ref: $is_ref,
+                            primitive: $primitive,
+                            in_type: $in_type,
+                            opts: WellKnownTypeOptions {
+                                $($opt_name: $opt_value,)*
+                                ..
+                                WellKnownTypeOptions::default()
+                            },
                         },
                     )*
                 }
@@ -723,61 +839,107 @@ macro_rules! well_known_types{
 }
 
 well_known_types! {
-    u8: u8, { in_type: 4, is_ref: false, out_type: None, primitive: true, };
-    u16: u16, { in_type: 6, is_ref: false, out_type: None, primitive: true, };
-    u32: u32, { in_type: 8, is_ref: false, out_type: None, primitive: true, };
-    u64: u64, { in_type: 10, is_ref: false, out_type: None, primitive: true, };
-    i8: i8, { in_type: 3, is_ref: false, out_type: None, primitive: true, };
-    i16: i16, { in_type: 5, is_ref: false, out_type: None, primitive: true, };
-    i32: i32, { in_type: 7, is_ref: false, out_type: None, primitive: true, };
-    i64: i64, { in_type: 9, is_ref: false, out_type: None, primitive: true, };
-    f32: f32, { in_type: 11, is_ref: false, out_type: None, primitive: true, };
-    f64: f64, { in_type: 12, is_ref: false, out_type: None, primitive: true, };
-    str: str, { in_type: 0, is_ref: false, out_type: Some(TLG_OUT_UTF8), primitive: false, };
-    ref_str: &str, {
-        in_type: TLG_IN_COUNTED_ANSI_STRING,
+    bool: bool => {
+        is_ref: false,
+        primitive: true,
+        in_type: InFlag::INT8,
+        out_type: Some(OutFlag::BOOLEAN),
+    }
+    u8: u8 => { is_ref: false, primitive: true, in_type: InFlag::UINT8, can_output_hex: true, }
+    u16: u16 => { is_ref: false, primitive: true, in_type: InFlag::UINT16, can_output_hex: true, }
+    u32: u32 => { is_ref: false, primitive: true, in_type: InFlag::UINT32, can_output_hex: true, }
+    u64: u64 => { is_ref: false, primitive: true, in_type: InFlag::UINT64, can_output_hex: true, }
+    i8: i8 => { is_ref: false, primitive: true, in_type: InFlag::INT8, can_output_hex: true, }
+    i16: i16 => { is_ref: false, primitive: true, in_type: InFlag::INT16, can_output_hex: true, }
+    i32: i32 => { is_ref: false, primitive: true, in_type: InFlag::INT32, can_output_hex: true, }
+    i64: i64 => { is_ref: false, primitive: true, in_type: InFlag::INT64, can_output_hex: true, }
+    f32: f32 => { is_ref: false, primitive: true, in_type: InFlag::FLOAT, }
+    f64: f64 => { is_ref: false, primitive: true, in_type: InFlag::DOUBLE, }
+    usize: usize => { is_ref: false, primitive: true, in_type: InFlag::NULL,
+        in_type_expr: Some(parse_quote!{
+            ::win_etw_provider::metadata::InFlag::USIZE.bits()
+        }),
+        can_output_hex: true,
+    }
+    isize: isize => { is_ref: false, primitive: true, in_type: InFlag::NULL,
+        in_type_expr: Some(parse_quote!{
+            ::win_etw_provider::metadata::InFlag::ISIZE.bits()
+        }),
+        can_output_hex: true,
+    }
+    str: str => { is_ref: false, primitive: false, in_type: InFlag::COUNTED_ANSI_STRING,
+        out_type: Some(OutFlag::UTF8),
+    }
+    ref_str: &str => {
         is_ref: true,
-        out_type: Some(TLG_OUT_UTF8),
         primitive: false,
-    };
-    guid: &GUID, { in_type: 15, is_ref: true, out_type: None, primitive: false, };
-    SocketAddrV4: &SocketAddrV4, {
-        in_type: TLG_IN_BINARY,
+        in_type: InFlag::COUNTED_ANSI_STRING,
+        out_type: Some(OutFlag::UTF8),
+    }
+    guid: &GUID => {
+        is_ref: true, primitive: false,
+        in_type: InFlag::GUID,
+        replacement_type: Some(parse_quote!(&::win_etw_provider::types::GUID)),
+    }
+    SocketAddrV4: &SocketAddrV4 => {
         is_ref: false,
-        out_type: Some(TLG_OUT_SOCKETADDRESS),
         primitive: false,
-    };
-    SocketAddrV6: &SocketAddrV6, {
-        in_type: TLG_IN_BINARY,
+        in_type: InFlag::BINARY,
+        out_type: Some(OutFlag::SOCKETADDRESS),
+        replacement_type: Some(parse_quote!(&::std::net::SocketAddrV4)),
+    }
+    SocketAddrV6: &SocketAddrV6 => {
         is_ref: false,
-        out_type: Some(TLG_OUT_SOCKETADDRESS),
         primitive: false,
-    };
-    SocketAddr: &SocketAddr, {
-        in_type: TLG_IN_BINARY,
+        in_type: InFlag::BINARY,
+        out_type: Some(OutFlag::SOCKETADDRESS),
+        replacement_type: Some(parse_quote!(&::std::net::SocketAddrV6)),
+    }
+    SocketAddr: &SocketAddr => {
         is_ref: false,
-        out_type: Some(TLG_OUT_SOCKETADDRESS),
         primitive: false,
-    };
+        in_type: InFlag::BINARY,
+        out_type: Some(OutFlag::SOCKETADDRESS),
+        replacement_type: Some(parse_quote!(&::std::net::SocketAddr)),
+    }
+    SystemTime: SystemTime => {
+        is_ref: false,
+        primitive: false,
+        in_type: InFlag::FILETIME,
+        replacement_type: Some(parse_quote!{ ::std::time::SystemTime }),
+    }
+    FILETIME: FILETIME => {
+        is_ref: true,
+        primitive: false,
+        in_type: InFlag::FILETIME,
+        replacement_type: Some(parse_quote!(::win_etw_provider::types::FILETIME)),
+    }
 
-    // std::time::SystemTime
-    SystemTime: SystemTime, {
-        in_type: 17,
+    HRESULT: HRESULT => {
         is_ref: false,
-        out_type: None,
         primitive: false,
-    };
+        in_type: InFlag::INT32,
+        replacement_type: Some(parse_quote!(i32)),
+        out_type: Some(OutFlag::HRESULT),
+    }
+
+    WIN32ERROR: WIN32ERROR => {
+        is_ref: false,
+        primitive: false,
+        in_type: InFlag::UINT32,
+        replacement_type: Some(parse_quote!(u32)),
+        out_type: Some(OutFlag::WIN32ERROR),
+    }
+
+    NTSTATUS: NTSTATUS => {
+        is_ref: false,
+        primitive: false,
+        in_type: InFlag::UINT32,
+        replacement_type: Some(parse_quote!(u32)),
+        out_type: Some(OutFlag::NTSTATUS),
+    }
 
     // SocketAddrV6: &SocketAddrV6, { in_type: 0, is_ref: true, None, };
-
     // usize, in_type: ;
     // isize, in_type: ;
-
 }
-
-const TLG_IN_BINARY: u8 = 14;
-const TLG_IN_COUNTED_ANSI_STRING: u8 = 23;
-const TLG_IN_CHAIN_FLAG: u8 = 0x80;
-
-const TLG_OUT_UTF8: u8 = 35;
-const TLG_OUT_SOCKETADDRESS: u8 = 10;

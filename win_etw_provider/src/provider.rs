@@ -201,7 +201,7 @@ impl<'a> EventDataDescriptor<'a> {
             Self {
                 ptr: s.as_ptr() as usize as u64,
                 size: s.len() as u32,
-                kind: crate::metadata::EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA,
+                kind: win_etw_metadata::EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA,
                 phantom_ref: PhantomData,
             }
         }
@@ -212,7 +212,7 @@ impl<'a> EventDataDescriptor<'a> {
             Self {
                 ptr: s.as_ptr() as usize as u64,
                 size: s.len() as u32,
-                kind: crate::metadata::EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA,
+                kind: win_etw_metadata::EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA,
                 phantom_ref: PhantomData,
             }
         }
@@ -251,6 +251,7 @@ well_known_types! {
     u8; u16; u32; u64;
     i8; i16; i32; i64;
     f32; f64;
+    usize; isize;
 }
 
 impl<'a> From<&'a str> for EventDataDescriptor<'a> {
@@ -310,4 +311,3 @@ macro_rules! write_event {
 
 #[cfg(test)]
 mod tests {}
-

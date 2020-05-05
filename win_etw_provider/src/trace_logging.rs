@@ -126,4 +126,3 @@ struct _tlgEventMetadata_t {
 extern "stdcall" {
     fn TraceLoggingRegister(provider: *mut _tlgProvider_t);
 }
-
