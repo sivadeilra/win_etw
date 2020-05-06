@@ -1,10 +1,10 @@
-use crate::provider::EventDataDescriptor;
+use crate::EventDataDescriptor;
 use zerocopy::AsBytes;
 
 pub use winapi::shared::guiddef::GUID;
 
-const AF_INET: u16 = 2;
-const AF_INET6: u16 = 23;
+pub const AF_INET: u16 = 2;
+pub const AF_INET6: u16 = 23;
 
 /// This has the same in-memory representation as the Win32 SOCKADDR_IN structure.
 /// https://docs.microsoft.com/en-us/windows/win32/api/ws2def/ns-ws2def-sockaddr_in

@@ -2,8 +2,9 @@
 
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+#![allow(unused)]
 
-use std::ffi::c_void;
+use core::ffi::c_void;
 use winapi::shared::guiddef::GUID;
 
 #[macro_export]
@@ -88,7 +89,7 @@ const _tlg_EVENT_METADATA_PREAMBLE: usize = 11; // sizeof(Channel + Level + Opco
 
 pub const WINEVENT_CHANNEL_TRACELOGGING: u8 = 11;
 
-// D:\os\public\amd64fre\onecore\internal\minwin\priv_sdk\inc\traceloggingprovider.h
+// See traceloggingprovider.h
 
 /*
 This is the data stored in the binary to describe a TraceLogging event.
@@ -124,5 +125,5 @@ struct _tlgEventMetadata_t {
 }
 
 extern "stdcall" {
-    fn TraceLoggingRegister(provider: *mut _tlgProvider_t);
+    // fn TraceLoggingRegister(provider: *mut _tlgProvider_t);
 }

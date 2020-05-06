@@ -39,15 +39,9 @@ impl log::Log for TraceLogger {
     fn flush(&self) {}
 }
 
-win_etw_macros::define_trace_logging_event! {
-    events RustLogProvider {
-        fn log(&self,
-            module_path: &str,
-            file: &str,
-            line: u32,
-            message: &str,
-        );
-    }
+#[win_etw_macros::trace_logging_events]
+trait RustLogProvider {
+    fn log(&self, module_path: &str, file: &str, line: u32, message: &str);
 }
 
 #[cfg(test)]

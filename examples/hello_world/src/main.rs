@@ -1,8 +1,6 @@
 #![allow(clippy::unreadable_literal)]
 #![forbid(unsafe_code)]
 
-use win_etw_macros::define_trace_logging_event;
-
 // use widestring::U16CString;
 use win_etw_provider::guid;
 use win_etw_provider::types::FILETIME;
@@ -55,79 +53,135 @@ fn main() {
     hello_provider.arg_win32error(winerror::ERROR_OUT_OF_PAPER);
 }
 
-define_trace_logging_event! {
-    events HelloWorldProvider {
-        /// Writes down that time that we bought ice cream.
-        // fn buy_ice_cream(&self, a: i32, b: u8);
+use win_etw_macros::trace_logging_events;
 
-        // fn arg_i32(&self, a: i32);
+#[trace_logging_events]
+trait HelloWorldProvider {
+    /// Writes down that time that we bought ice cream.
+    // fn buy_ice_cream(&self, a: i32, b: u8);
 
-        /// Log a floating point value.
-        #[event(level = "info")]
-        fn arg_f32(&self, a: f32);
+    fn arg_i32(&self, a: i32);
+    fn arg_u8(&self, a: u8);
 
-        fn arg_slice_u8(&self, arg: &[u8]);
-        fn arg_slice_i32(&self, arg: &[i32]);
-        fn arg_str(&self, arg: &str);
-        // fn arg_bad(&self, arg: ());
+    /// Log a floating point value.
+    #[event(level = "info")]
+    fn arg_f32(&self, a: f32);
 
-        fn arg_guid(&self, arg: &GUID);
+    fn arg_slice_u8(&self, arg: &[u8]);
+    fn arg_slice_i32(&self, arg: &[i32]);
+    fn arg_str(&self, arg: &str);
 
+    fn arg_guid(&self, arg: &GUID);
 
-        #[event(level = "error")]
-        fn something_bad_happened(&self, message: &str);
+    #[event(level = "error")]
+    fn something_bad_happened(&self, message: &str);
 
-        #[event(task = 42, opcode = 99)]
-        fn client_connected_v4(&self, client_addr: &SocketAddrV4);
+    #[event(task = 42, opcode = 99)]
+    fn client_connected_v4(&self, client_addr: &SocketAddrV4);
 
-        #[event(task = 42, opcode = 99)]
-        fn client_connected_v6(&self, client_addr: &SocketAddrV6);
+    #[event(task = 42, opcode = 99)]
+    fn client_connected_v6(&self, client_addr: &SocketAddrV6);
 
-        #[event(task = 42, opcode = 99)]
-        fn client_connected(&self, client_addr: &SocketAddr);
+    #[event(task = 42, opcode = 99)]
+    fn client_connected(&self, client_addr: &SocketAddr);
 
-        fn file_created(&self, create_time: SystemTime);
+    fn file_created(&self, create_time: SystemTime);
 
-        fn file_created_filetime(&self, t: FILETIME);
+    fn file_created_filetime(&self, t: FILETIME);
 
-        fn arg_bool(&self, a: bool);
+    fn arg_bool(&self, a: bool);
 
-        fn arg_usize(&self, a: usize);
-        fn arg_isize(&self, a: isize);
+    fn arg_usize(&self, a: usize);
+    fn arg_isize(&self, a: isize);
 
-        fn arg_u32_hex(
-            &self,
-            #[event(output = "hex")]
-            a: u32);
+    fn arg_u32_hex(&self, #[event(output = "hex")] a: u32);
 
-        fn arg_hresult(&self, a: HRESULT);
-        fn arg_ntstatus(&self, a: NTSTATUS);
-        fn arg_win32error(&self, a: WIN32ERROR);
-
-        // foo: [i32; 4]
-        // fn hello_world(&self, message: &str, ints: &[i32], more_ints: &[i32]);
-    }
+    fn arg_hresult(&self, a: HRESULT);
+    fn arg_ntstatus(&self, a: NTSTATUS);
+    fn arg_win32error(&self, a: WIN32ERROR);
 }
 
-define_trace_logging_event! {
-    events AnotherFineProvider {
-        fn arg_str(&self, arg: &str);
-    }
+#[trace_logging_events]
+trait AnotherFineProvider {
+    fn arg_str(&self, arg: &str);
 }
 
-/*
-define_trace_logging_event!{
-    events TestingErrors {
-        fn missing_self(a: i32);
-        fn bad_self_mutable(&mut self);
-        fn bad_self_by_value(self);
-        fn bad_self_lifetime<'a>(&'a self);
-        fn bad_self_box(self: Box<Self>);
-        fn bad_arg(&self, a: ());
-        fn bad_arg_ref_string(&self, a: &String);
-        fn bad_arg_string(&self, a: String);
-        fn bad_arg_slice(&self, a: &[()]);
-        fn bad_arg_slice_str(&self, a: &[&str]);
-    }
+#[trace_logging_events]
+trait TestManyEvents {
+
+    fn arg_bool(&self, a: bool);
+    fn arg_u8(&self, a: u8);
+    fn arg_u16(&self, a: u16);
+    fn arg_u32(&self, a: u32);
+    fn arg_u64(&self, a: u64);
+    fn arg_i8(&self, a: i8);
+    fn arg_i16(&self, a: i16);
+    fn arg_i32(&self, a: i32);
+    fn arg_i64(&self, a: i64);
+    fn arg_f32(&self, a: f32);
+    fn arg_f64(&self, a: f64);
+    fn arg_usize(&self, a: usize);
+    fn arg_isize(&self, a: isize);
+
+    // fn arg_slice_bool(&self, a: &[bool]);
+    fn arg_slice_u8(&self, a: &[u8]);
+    fn arg_slice_u16(&self, a: &[u16]);
+    fn arg_slice_u32(&self, a: &[u32]);
+    fn arg_slice_u64(&self, a: &[u64]);
+    fn arg_slice_i8(&self, a: &[i8]);
+    fn arg_slice_i16(&self, a: &[i16]);
+    fn arg_slice_i32(&self, a: &[i32]);
+    fn arg_slice_i64(&self, a: &[i64]);
+    fn arg_slice_f32(&self, a: &[f32]);
+    fn arg_slice_f64(&self, a: &[f64]);
+    fn arg_slice_usize(&self, a: &[usize]);
+    fn arg_slice_isize(&self, a: &[isize]);
+
+    fn arg_str(&self, arg: &str);
+    fn arg_guid(&self, arg: &GUID);
+    fn arg_system_time(&self, a: SystemTime);
+    fn arg_filetime(&self, a: FILETIME);
+
+    #[event(level = "info")]
+    fn arg_u8_at_info(&self, a: u8);
+
+    #[event(level = "warn")]
+    fn arg_u8_at_warn(&self, a: u8);
+
+    #[event(level = "error")]
+    fn arg_u8_at_error(&self, a: u8);
+
+    #[event(level = "trace")]
+    fn arg_u8_at_trace(&self, a: u8);
+
+    #[event(level = "debug")]
+    fn arg_u8_at_debug(&self, a: u8);
+
+
+    #[event(task = 100)]
+    fn arg_with_task(&self, a: u8);
+
+    #[event(opcode = 10)]
+    fn arg_with_opcode(&self, a: u8);
+
+    fn arg_u32_hex(&self, #[event(output = "hex")] a: u32);
+
+    fn arg_hresult(&self, a: HRESULT);
+    fn arg_ntstatus(&self, a: NTSTATUS);
+    fn arg_win32error(&self, a: WIN32ERROR);
 }
-*/
+
+#[trace_logging_events]
+#[cfg(feature = "negative_testing")]
+trait TestingErrors {
+    fn missing_self(a: i32);
+    fn bad_self_mutable(&mut self);
+    fn bad_self_by_value(self);
+    fn bad_self_lifetime<'a>(&'a self);
+    fn bad_self_box(self: Box<Self>);
+    fn bad_arg(&self, a: ());
+    fn bad_arg_ref_string(&self, a: &String);
+    fn bad_arg_string(&self, a: String);
+    fn bad_arg_slice(&self, a: &[()]);
+    fn bad_arg_slice_str(&self, a: &[&str]);
+}

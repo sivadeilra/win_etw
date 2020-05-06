@@ -1,13 +1,11 @@
-use core::ffi::c_void;
-use core::marker::PhantomData;
-use core::mem::size_of;
+use crate::EventDataDescriptor;
+use core::convert::TryFrom;
+// use core::ffi::c_void;
 use core::ptr::null_mut;
-use std::ffi::OsStr;
-use widestring::{U16CStr, U16CString};
+use widestring::U16CStr;
 use winapi::shared::evntprov;
 use winapi::shared::guiddef::GUID;
-use winapi::shared::winerror;
-use zerocopy::AsBytes;
+// use winapi::shared::winerror;
 
 pub struct EventProvider {
     handle: evntprov::REGHANDLE,
@@ -91,6 +89,7 @@ impl EventProvider {
     }
     */
 
+    #[inline(always)]
     pub fn write(&self, descriptor: &'static EventDescriptor, data: &[EventDataDescriptor<'_>]) {
         unsafe {
             let error = evntprov::EventWrite(
@@ -101,21 +100,31 @@ impl EventProvider {
                     as *mut evntprov::EVENT_DATA_DESCRIPTOR,
             );
             if error != 0 {
-                println!("EventWrite failed: {}", error);
-            } else {
-                println!(
-                    "EventWrite succeeded, num_data_descriptors = {}",
-                    data.len()
-                );
+                self.write_failed(error)
             }
         }
     }
 
-    pub fn write_string(&self, level: u8, keyword: u64, s: &U16CString) {
+    #[inline(never)]
+    fn write_failed(&self, error: u32) {
+        #[cfg(feature = "std")]
+        {
+            println!("EventWrite failed: {}", error);
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            let _ = error;
+        }
+    }
+
+    pub fn write_string(&self, level: u8, keyword: u64, s: &U16CStr) {
         unsafe {
             let error = evntprov::EventWriteString(self.handle, level, keyword, s.as_ptr());
             if error != 0 {
-                println!("EventWriteString failed: {}", error);
+                #[cfg(feature = "std")]
+                {
+                    println!("EventWriteString failed: {}", error);
+                }
             }
         }
     }
@@ -144,6 +153,25 @@ impl EventProvider {
             }
         }
     }
+
+    // See TraceLoggingRegisterEx in traceloggingprovider.h.
+    // This registers provider metadata.
+    pub fn register_provider_metadata(&mut self, provider_metadata: &'static [u8]) {
+        unsafe {
+            let error = evntprov::EventSetInformation(
+                self.handle,
+                2,
+                provider_metadata.as_ptr() as *mut winapi::ctypes::c_void,
+                u32::try_from(provider_metadata.len()).unwrap(),
+            );
+            if error != 0 {
+                #[cfg(feature = "std")]
+                {
+                    eprintln!("warning: call to EventSetInformation (to register event provider metadata) failed: {}", error);
+                }
+            }
+        }
+    }
 }
 
 impl Drop for EventProvider {
@@ -157,135 +185,6 @@ impl Drop for EventProvider {
 unsafe impl<'a> Sync for EventProvider {}
 
 pub use evntprov::EVENT_DESCRIPTOR as EventDescriptor;
-
-#[repr(C)]
-pub struct EventDataDescriptor<'a> {
-    // descriptor: evntprov::EVENT_DATA_DESCRIPTOR,
-    ptr: u64,
-    size: u32,
-    kind: u32,
-    phantom_ref: PhantomData<&'a ()>,
-}
-
-impl EventDataDescriptor<'static> {
-    pub fn empty() -> Self {
-        unsafe {
-            Self {
-                ptr: 0,
-                size: 0,
-                kind: 0,
-                phantom_ref: PhantomData,
-            }
-        }
-    }
-}
-
-impl<'a> EventDataDescriptor<'a> {
-    pub fn is_empty(&self) -> bool {
-        self.ptr == 0 && self.size == 0
-    }
-
-    pub fn for_bytes(s: &'a [u8]) -> Self {
-        unsafe {
-            Self {
-                ptr: s.as_ptr() as usize as u64,
-                size: s.len() as u32,
-                kind: 0,
-                phantom_ref: PhantomData,
-            }
-        }
-    }
-
-    pub fn for_provider_metadata(s: &'a [u8]) -> Self {
-        unsafe {
-            Self {
-                ptr: s.as_ptr() as usize as u64,
-                size: s.len() as u32,
-                kind: win_etw_metadata::EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA,
-                phantom_ref: PhantomData,
-            }
-        }
-    }
-
-    pub fn for_event_metadata(s: &'a [u8]) -> Self {
-        unsafe {
-            Self {
-                ptr: s.as_ptr() as usize as u64,
-                size: s.len() as u32,
-                kind: win_etw_metadata::EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA,
-                phantom_ref: PhantomData,
-            }
-        }
-    }
-
-    pub fn from_as_bytes<T: AsBytes>(s: &'a T) -> Self {
-        Self::for_bytes(s.as_bytes())
-    }
-}
-
-macro_rules! well_known_types {
-    (
-        $(
-            $t:ident ;
-        )*
-    ) => {
-        $(
-            impl<'a> From<&'a $t> for EventDataDescriptor<'a> {
-                fn from(value: &'a $t) -> EventDataDescriptor<'a> {
-                    EventDataDescriptor::for_bytes(value.as_bytes())
-                }
-            }
-
-            impl<'a> From<&'a [$t]> for EventDataDescriptor<'a> {
-                fn from(value: &'a [$t]) -> EventDataDescriptor<'a> {
-                    EventDataDescriptor::for_bytes(value.as_bytes())
-                }
-            }
-
-        )*
-
-    }
-}
-
-well_known_types! {
-    u8; u16; u32; u64;
-    i8; i16; i32; i64;
-    f32; f64;
-    usize; isize;
-}
-
-impl<'a> From<&'a str> for EventDataDescriptor<'a> {
-    fn from(value: &'a str) -> EventDataDescriptor<'a> {
-        let bytes: &'a [u8] = value.as_bytes();
-        EventDataDescriptor::for_bytes(bytes)
-    }
-}
-
-impl<'a> From<&'a U16CStr> for EventDataDescriptor<'a> {
-    fn from(value: &'a U16CStr) -> EventDataDescriptor<'a> {
-        unsafe {
-            Self {
-                ptr: value.as_ptr() as usize as u64,
-                size: (value.len() * 2 + 1) as u32,
-                kind: 0,
-                phantom_ref: PhantomData,
-            }
-        }
-    }
-}
-
-impl<'a> From<&'a GUID> for EventDataDescriptor<'a> {
-    fn from(value: &'a GUID) -> EventDataDescriptor<'a> {
-        unsafe {
-            Self {
-                ptr: value as *const GUID as usize as u64,
-                size: size_of::<GUID>() as u32,
-                kind: 0,
-                phantom_ref: PhantomData,
-            }
-        }
-    }
-}
 
 #[macro_export]
 macro_rules! write_event {

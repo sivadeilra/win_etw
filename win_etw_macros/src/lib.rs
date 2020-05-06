@@ -1,3 +1,5 @@
+// https://doc.rust-lang.org/reference/procedural-macros.html
+
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::cognitive_complexity)]
 #![allow(clippy::single_match)]
@@ -5,76 +7,26 @@
 extern crate proc_macro;
 
 use proc_macro2::{Span, TokenStream};
-use quote::{quote, quote_spanned, ToTokens};
+use quote::{quote, quote_spanned};
 use std::iter::Extend;
-use syn::braced;
-use syn::parse::{Parse, ParseStream};
 use syn::spanned::Spanned;
 use syn::{
-    parse_macro_input, parse_quote, Attribute, Error, Expr, ExprLit, FnArg, Ident, ImplItemMethod,
-    Lit, Meta, MetaNameValue, NestedMeta, Pat, Path, TraitItemMethod, Type,
+    parse_macro_input, parse_quote, Attribute, Error, Expr, ExprLit, FnArg, Ident,
+    Lit, Path,
 };
 use win_etw_metadata::{InFlag, OutFlag};
-
-struct TraceLoggingDef {
-    provider_name: Ident,
-    methods: Vec<TraitItemMethod>,
-}
-impl Parse for TraceLoggingDef {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let id = input.parse::<Ident>()?;
-        assert_eq!(id.to_string(), "events");
-
-        let provider_name = input.parse::<Ident>()?;
-
-        let inner;
-        braced!(inner in input);
-
-        let mut methods = Vec::new();
-        while !inner.is_empty() {
-            let method = inner.parse::<TraitItemMethod>()?;
-            methods.push(method);
-        }
-
-        Ok(TraceLoggingDef {
-            provider_name,
-            methods,
-        })
-    }
-}
-
-#[proc_macro]
-pub fn define_trace_logging_event(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let mut errors = Vec::new();
-    let mut output = define_trace_logging_event_impl(&mut errors, input);
-    if !errors.is_empty() {
-        let error_tokens = errors
-            .into_iter()
-            .map(|e| e.to_compile_error())
-            .collect::<TokenStream>();
-        let error_token_stream: proc_macro::TokenStream = error_tokens.into();
-        output.extend(error_token_stream);
-    }
-    output
-}
 
 fn err_spanned<T: quote::ToTokens>(item: &T, msg: &str) -> TokenStream {
     Error::new_spanned(item, msg).to_compile_error()
 }
 
-fn create_provider_metadata(
-    logging_def: &TraceLoggingDef,
-    provider_metadata_ident: &Ident,
-) -> TokenStream {
+fn create_provider_metadata(provider_name: &Ident, provider_metadata_ident: &Ident) -> TokenStream {
     let mut provider_metadata: Vec<u8> = Vec::new();
-    let provider_name: String = logging_def.provider_name.to_string();
+    let provider_name: String = provider_name.to_string();
 
     let provider_metadata_len = 2 + provider_name.len() + 1;
     if provider_metadata_len > 0xffff {
-        return err_spanned(
-            &logging_def.provider_name,
-            "The provider name is excessively long.",
-        );
+        return err_spanned(&provider_name, "The provider name is excessively long.");
     }
     provider_metadata.push((provider_metadata_len & 0xff) as u8);
     provider_metadata.push((provider_metadata_len >> 8) as u8);
@@ -123,7 +75,7 @@ fn parse_event_field(
     event_attr: Option<&Attribute>,
     field_span: proc_macro2::Span,
     field_name: &Ident,
-    field_ty: &mut Type,
+    field_ty: &mut syn::Type,
     data_descriptor_array: &mut TokenStream,
     event_metadata: &mut Vec<syn::Expr>,
     statements: &mut TokenStream,
@@ -149,10 +101,10 @@ fn parse_event_field(
     let mut output_hex = false;
     if let Some(event_attr) = event_attr {
         match event_attr.parse_meta() {
-            Ok(Meta::List(list)) => {
+            Ok(syn::Meta::List(list)) => {
                 for item in list.nested.iter() {
                     match item {
-                        syn::NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+                        syn::NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue {
                             path, lit, ..
                         })) => {
                             if *path == parse_quote!(output) {
@@ -362,9 +314,9 @@ fn parse_event_field(
         }
     } else {
         match &*field_ty {
-            Type::Reference(ref_ty) => {
+            syn::Type::Reference(ref_ty) => {
                 match &*ref_ty.elem {
-                    Type::Slice(slice_ty) => {
+                    syn::Type::Slice(slice_ty) => {
                         if let Some(t) = well_known_types.find(&slice_ty.elem) {
                             if !t.primitive {
                                 return Err(UnsupportedField);
@@ -423,14 +375,28 @@ fn parse_event_field(
     Ok(())
 }
 
-fn define_trace_logging_event_impl(
-    errors: &mut Vec<Error>,
+
+#[proc_macro_attribute]
+pub fn trace_logging_events(
+    _attr: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    // let input: proc_macro2::TokenStream = input.into();
-    let mut logging_def = parse_macro_input!(input as TraceLoggingDef);
+    /*
+    let attr_meta = parse_macro_input!(attr as syn::Meta);
+    println!("attr_meta = {:?}", attr_meta);
+    */
 
-    let provider_name = &logging_def.provider_name;
+    let logging_item = parse_macro_input!(input as syn::Item);
+    let logging_trait = if let syn::Item::Trait(ref t) = &logging_item {
+        t
+    } else {
+        panic!("The input item is required to be a trait.");
+    };
+
+    let mut errors: Vec<Error> = Vec::new();
+
+    let provider_name = &logging_trait.ident;
+    let provider_name_string = provider_name.to_string();
 
     let wk = WellKnownTypes::new();
 
@@ -439,20 +405,28 @@ fn define_trace_logging_event_impl(
     let mut output = TokenStream::new();
 
     let provider_metadata_ident = Ident::new(
-        &format!(
-            "{}_PROVIDER_METADATA",
-            logging_def.provider_name.to_string()
-        ),
-        logging_def.provider_name.span(),
+        &format!("{}_PROVIDER_METADATA", provider_name_string),
+        provider_name.span(),
     );
     output.extend(create_provider_metadata(
-        &logging_def,
+        &provider_name,
         &provider_metadata_ident,
     ));
 
-    let mut output_methods = TokenStream::new();
+    let mut output_impl: syn::ItemImpl = parse_quote!(impl #provider_name {});
 
-    for (method_index, method) in logging_def.methods.iter_mut().enumerate() {
+    for (method_index, method) in logging_trait
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let syn::TraitItem::Method(ref m) = item {
+                Some(m)
+            } else {
+                None
+            }
+        })
+        .enumerate()
+    {
         let event_id = method_index as u16;
 
         // Check some requirements for the method signature. If the requirements are not met, we
@@ -480,9 +454,14 @@ fn define_trace_logging_event_impl(
 
         let event_name: String = method.sig.ident.to_string();
 
-        // Here we build the data descriptor array.
+        // Here we build the data descriptor array. The data descriptor array is constructed on
+        // the stack, and has a statically-known size. It contains pointers to data fields. The
+        // event metadata describes the order and type of the data pointed-to by the data
+        // descriptors.
+        //
+        // For self-describing events (TraceLogging), the first two items in the data descriptor
+        // array identify the provider metadata and the event metadata.
         let mut data_descriptor_array = TokenStream::new();
-
         data_descriptor_array.extend(quote! {
             EventDataDescriptor::for_provider_metadata(&#provider_metadata_ident[..]),
             EventDataDescriptor::for_event_metadata(&EVENT_METADATA[..]),
@@ -502,7 +481,11 @@ fn define_trace_logging_event_impl(
 
         // Each parameter (except for &self) becomes an event field.
         let mut found_receiver = false;
-        for param in method.sig.inputs.iter_mut() {
+
+        // sig is the function signature for the function that we will generate for this event.
+        let mut sig = method.sig.clone();
+
+        for param in sig.inputs.iter_mut() {
             let param_span = param.span();
             match param {
                 FnArg::Receiver(syn::Receiver {
@@ -539,7 +522,7 @@ fn define_trace_logging_event_impl(
                         }
                     });
                     let param_name: &Ident = match &*param_typed.pat {
-                        Pat::Ident(ref name) => &name.ident,
+                        syn::Pat::Ident(ref name) => &name.ident,
                         _ => {
                             errors.push(Error::new(
                                 param.span(),
@@ -550,7 +533,7 @@ fn define_trace_logging_event_impl(
                     };
 
                     if parse_event_field(
-                        errors,
+                        &mut errors,
                         &wk,
                         event_attr.as_ref(),
                         param_span,
@@ -571,6 +554,7 @@ fn define_trace_logging_event_impl(
             }
         }
 
+        // We require that every function declare a '&self' receiver parameter.
         if !found_receiver {
             errors.push(Error::new_spanned(
                 &method.sig,
@@ -579,6 +563,8 @@ fn define_trace_logging_event_impl(
             continue;
         }
 
+        // Now that we have processed all parameters ("fields"), we can finish constructing
+        // the per-event metadata.
         let event_metadata_len = event_metadata.len();
         if event_metadata_len > 0xffff {
             errors.push(Error::new(
@@ -587,7 +573,6 @@ fn define_trace_logging_event_impl(
             ));
             continue;
         }
-
         let event_metadata_len_b0 = (event_metadata_len & 0xff) as u8;
         let event_metadata_len_b1 = (event_metadata_len >> 8) as u8;
         event_metadata[0] = parse_quote! { #event_metadata_len_b0 };
@@ -618,7 +603,7 @@ fn define_trace_logging_event_impl(
                     Ok(syn::Meta::List(list)) => {
                         for item in list.nested.iter() {
                             match item {
-                                NestedMeta::Meta(Meta::NameValue(MetaNameValue {
+                                syn::NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue {
                                     path,
                                     lit,
                                     ..
@@ -709,14 +694,16 @@ fn define_trace_logging_event_impl(
             method_attrs.push(parse_quote!( #![doc = #method_doc] ));
         }
 
-        let m = ImplItemMethod {
+        // Build the method that implements this event.
+        let m = syn::ImplItemMethod {
             attrs: method_attrs,
             defaultness: None,
-            sig: method.sig.clone(),
+            sig,
             vis: parse_quote! { pub },
-            block: parse_quote! {
+            block: syn::parse2(quote! {
                 {
-                    use ::win_etw_provider::provider::{EventDataDescriptor, EventDescriptor};
+                    use ::win_etw_provider::provider::EventDescriptor;
+                    use ::win_etw_provider::EventDataDescriptor;
 
                     const EVENT_LEVEL: u8 = #event_level;
                     const EVENT_OPCODE: u8 = #event_opcode;
@@ -745,10 +732,10 @@ fn define_trace_logging_event_impl(
                     ];
                     self.provider.write(&EVENT_DESCRIPTOR, &data_descriptors);
                 }
-            },
+            }).unwrap(),
         };
 
-        output_methods.extend(syn::ImplItem::Method(m).to_token_stream());
+        output_impl.items.push(syn::ImplItem::Method(m));
     }
 
     output.extend(quote! {
@@ -756,16 +743,15 @@ fn define_trace_logging_event_impl(
             pub provider: ::win_etw_provider::provider::EventProvider,
         }
 
-        impl #provider_name {
-            #output_methods
-        }
+        #output_impl
     });
 
+    output.extend(errors.into_iter().map(|e| e.to_compile_error()));
     output.into()
 }
 
 struct WellKnownTypeInfo {
-    ty: Type,
+    ty: syn::Type,
     code: WellKnownType,
     in_type: InFlag,
     is_ref: bool,
@@ -826,7 +812,7 @@ macro_rules! well_known_types{
                 }
             }
 
-            fn find(&self, ty: &Type) -> Option<&WellKnownTypeInfo> {
+            fn find(&self, ty: &syn::Type) -> Option<&WellKnownTypeInfo> {
                 $(
                     if *ty == self.$t.ty {
                         return Some(&self.$t);
