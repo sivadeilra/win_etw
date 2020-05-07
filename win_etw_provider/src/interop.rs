@@ -1,4 +1,1 @@
-
-
-extern "stdcall" {
-}
+extern "stdcall" {}

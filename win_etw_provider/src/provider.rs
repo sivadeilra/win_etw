@@ -1,4 +1,4 @@
-use crate::{EventDataDescriptor, Error};
+use crate::{Error, EventDataDescriptor};
 use core::convert::TryFrom;
 // use core::ffi::c_void;
 use core::ptr::null_mut;

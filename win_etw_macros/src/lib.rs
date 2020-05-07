@@ -1,3 +1,114 @@
+//! Allows you to create ETW Trace Logging Providers.
+//!
+//! This module provides the `#[trace_logging_events]` macro, which allows you to define a
+//! Trace Logging Provider.
+//!
+//! This macro is intended for use only when targeting Windows. When targeting other platforms,
+//! this macro will still work, but will generate code that does nothing.
+//!
+//! # Example
+//!
+//! This example shows how to define several events for a simple chat service. First, you declare
+//! the events:
+//!
+//! ```ignore
+//! use win_etw_macros::trace_logging_events;
+//!
+//! #[trace_logging_events(guid = "... your guid here ...")]
+//! pub trait MyAppEvents {
+//!     fn user_connected(&self, user_id: &str, client_address: &SockAddr);
+//!     fn channel_created(&self, owner: &str, channel: &str);
+//!     fn message_sent(&self, sender: &str, channel: &str, message: &str);
+//!     fn user_disconnected(&self, user_id: &str, total_message_sent: u64);
+//! }
+//! ```
+//!
+//! During application initialization, you create an instance of the event provider. This is also
+//! known as _registering_ the provider, in Windows terminology. Then you can call methods on the
+//! event provider, to report events:
+//!
+//! ```ignore
+//! let my_app_events = MyAppEvents::register().unwrap();
+//!
+//! let alice_addr: std::net::SockAddr = "192.168.0.2:333".parse().unwrap();
+//! my_app_events.user_connected("alice", &alice_addr);
+//! my_app_events.channel_created("alice", "#rustaceans");
+//! my_app_events.message_sent("alice", "#rustaceans", "Hello, world!", 1);
+//! ```
+//!
+//! # Assigning a GUID
+//!
+//! You _must_ assign a unique GUID to each event source. ETW uses this GUID to identify its
+//! internal data definitions for your events, so it is crucial that you not use the same GUID for
+//! more than one event source.
+//!
+//! There are many tools which can assign a GUID; the most common tools simply use a random
+//! number generator. You can use any of these methods (or others not listed here):
+//!
+//! * In Visual Studio, in the Tools menu, select "Create GUID".
+//! * From a Visual Studio command line, run `uuidgen.exe`.
+//! * From an Ubuntu shell, run `uuidgen`.
+//!
+//! Then add it to the attribute:
+//!
+//! ```ignore
+//! #[trace_logging_events(guid = "... your guid here ...")]
+//! pub trait MyAppEvents { ... }
+//! ```
+//! # Defining the event function signatures
+//! The `#[trace_logging_events]` attribute uses a trait definition as its input. However, this
+//! trait is _not_ available for use as an ordinary trait. It is _only_ used to provide the method
+//! signatures that are inputs to `#[trace_logging_events]`.
+//!
+//! Each function signature defined in the trait declares a single event type. Each parameter of the
+//! function becomes a field of the event. Only a limited set of field types are supported.
+//!
+//! # Supported field types
+//! Only a limited set of field types are supported.
+//!
+//! * Integer primitives up to 64 bits: `i8, i16, i32, i64, u8, u16, u32, u64`
+//! * Floating point primitives: `f32`, `f64`
+//! * Architecture-dependent sizes: `usize`, `isize`.
+//! * Bool: `bool`
+//! * Slices of all of the supported primitives, except for bool:
+//!   `&[u8]`, `&[u16]`, etc.
+//! * Windows `FILETIME`. The type must be declared _exactly_ as `FILETIME`; type aliases or
+//!   fully-qualified paths (such as `winapi::shared::minwindef::FILETIME`) _will not work_.
+//! * `std::time::SystemTime` is supported, but it must be declared _exactly_ as `SystemTime`;
+//!   type aliases or fully-qualified paths (such as `std::time::SystemTime`) _will not work_.
+//! * `SockAddr`, `SockAddrV4`, and `SockAddrV6` are supported. They must be declared exactly as
+//!   shown, not using fully-qualified names or type aliases.
+//!
+//! # How to view events
+//!
+//! There are a variety of tools which can be used to capture and view ETW events.
+//! The simplest tool is the `TraceView` tool from the Windows SDK. Typically it is installed
+//! at this path: `C:\Program Files (x86)\Windows Kits\10\bin\10.0.<xxxxx>.0\x64\traceview.exe`,
+//! where `<xxxxx>` is the release number of the Windows SDK.
+//!
+//! Run `TraceView`, then select "File", then "Create New Log Session". Select "Manually Entered
+//! GUID or Hashed Name" and enter the GUID that you have assigned to your event source. Click OK.
+//! The next dialog will prompt you to choose a source of WPP format information; select Auto
+//! and click OK.
+//!
+//! At this point, `TraceView` should be capturing events (for your assigned GUID) and displaying
+//! them in real time, regardless of which process reported the events.
+//!
+//! These tools can also be used to capture ETW events:
+//! * [Windows Performance Recorder](https://docs.microsoft.com/en-us/windows-hardware/test/wpt/windows-performance-recorder)
+//!   This tool is intended for capturing system-wide event streams. It is not useful for capturing
+//!   events for a single event source.
+//! * [logman](https://docs.microsoft.com/en-us/windows-server/administration/windows-commands/logman)
+//!   is a command-line tool for managing events.
+//! * [Tracelog](https://docs.microsoft.com/en-us/windows-hardware/drivers/devtest/tracelog)
+//!
+//! There are other tools, such as the Windows Performance Recorder, which can capture ETW events.
+//!
+//! # References
+//! * [Event Tracing for Windows (ETW) Simplified](https://support.microsoft.com/en-us/help/2593157/event-tracing-for-windows-etw-simplified)
+//! * [TraceLogging for Event Tracing for Windows (ETW)](https://docs.microsoft.com/en-us/windows/win32/tracelogging/trace-logging-portal)
+//! * [Record and View TraceLogging Events](https://docs.microsoft.com/en-us/windows/win32/tracelogging/tracelogging-record-and-display-tracelogging-events)
+
 // https://doc.rust-lang.org/reference/procedural-macros.html
 
 #![allow(clippy::too_many_arguments)]
@@ -577,7 +688,8 @@ fn parse_event_attributes(
                                         attrs: Vec::new(),
                                     });
                                 } else {
-                                    errors.push(Error::new_spanned(item, "Unrecognized attribute."));
+                                    errors
+                                        .push(Error::new_spanned(item, "Unrecognized attribute."));
                                 }
                             }
                             _ => {
@@ -621,7 +733,22 @@ fn parse_event_attributes(
     }
 }
 
-// #[cfg(not(test))]
+/// Allows you to create ETW Trace Logging Providers.
+///
+/// You can use this macro to define a Trace Logging Provider. See the module docs for more detailed
+/// instructions for this macro.
+///
+/// ```ignore
+/// use win_etw_macros::trace_logging_events;
+///
+/// #[trace_logging_events(guid = "... your guid here ...")]
+/// pub trait MyAppEvents {
+///     fn user_connected(&self, user_id: &str, client_address: &SockAddr);
+///     fn channel_created(&self, owner: &str, channel: &str);
+///     fn message_sent(&self, sender: &str, channel: &str, message: &str);
+///     fn user_disconnected(&self, user_id: &str);
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn trace_logging_events(
     attr: proc_macro::TokenStream,

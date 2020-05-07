@@ -19,7 +19,6 @@ const PROVIDER_GUID: GUID =
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 fn main() {
-
     let hello_provider = HelloWorldProvider::register().unwrap();
     println!("successfully registered provider.");
 

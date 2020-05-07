@@ -126,7 +126,7 @@ test_case! {
             fn arg_f64(&self, a: f64);
             fn arg_usize(&self, a: usize);
             fn arg_isize(&self, a: isize);
-        
+
             // fn arg_slice_bool(&self, a: &[bool]);
             fn arg_slice_u8(&self, a: &[u8]);
             fn arg_slice_u16(&self, a: &[u16]);
@@ -140,35 +140,35 @@ test_case! {
             fn arg_slice_f64(&self, a: &[f64]);
             fn arg_slice_usize(&self, a: &[usize]);
             fn arg_slice_isize(&self, a: &[isize]);
-        
+
             fn arg_str(&self, arg: &str);
             fn arg_guid(&self, arg: &GUID);
             fn arg_system_time(&self, a: SystemTime);
             fn arg_filetime(&self, a: FILETIME);
-        
+
             #[event(level = "info")]
             fn arg_u8_at_info(&self, a: u8);
-        
+
             #[event(level = "warn")]
             fn arg_u8_at_warn(&self, a: u8);
-        
+
             #[event(level = "error")]
             fn arg_u8_at_error(&self, a: u8);
-        
+
             #[event(level = "trace")]
             fn arg_u8_at_trace(&self, a: u8);
-        
+
             #[event(level = "debug")]
             fn arg_u8_at_debug(&self, a: u8);
-        
+
             #[event(task = 100)]
             fn arg_with_task(&self, a: u8);
-        
+
             #[event(opcode = 10)]
             fn arg_with_opcode(&self, a: u8);
-        
+
             fn arg_u32_hex(&self, #[event(output = "hex")] a: u32);
-        
+
             fn arg_hresult(&self, a: HRESULT);
             fn arg_ntstatus(&self, a: NTSTATUS);
             fn arg_win32error(&self, a: WIN32ERROR);
@@ -338,4 +338,3 @@ test_case! {
         "The only attributes allowed on event methods are #[doc] and #[event(...)] attributes.",
     ]
 }
-
