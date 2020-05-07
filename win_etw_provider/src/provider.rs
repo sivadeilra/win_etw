@@ -1,4 +1,4 @@
-use crate::EventDataDescriptor;
+use crate::{EventDataDescriptor, Error};
 use core::convert::TryFrom;
 // use core::ffi::c_void;
 use core::ptr::null_mut;
@@ -138,13 +138,13 @@ impl EventProvider {
 }
 
 impl EventProvider {
-    pub fn register(provider_id: &GUID) -> Result<EventProvider, u32> {
+    pub fn register(provider_id: &GUID) -> Result<EventProvider, Error> {
         unsafe {
             let mut handle: evntprov::REGHANDLE = 0;
             let error =
                 evntprov::EventRegister(provider_id as *const GUID, None, null_mut(), &mut handle);
             if error != 0 {
-                Err(error)
+                Err(Error::WindowsError(error))
             } else {
                 Ok(EventProvider {
                     handle,

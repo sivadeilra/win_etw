@@ -10,11 +10,12 @@ use proc_macro2::{Span, TokenStream};
 use quote::{quote, quote_spanned};
 use std::iter::Extend;
 use syn::spanned::Spanned;
-use syn::{
-    parse_macro_input, parse_quote, Attribute, Error, Expr, ExprLit, FnArg, Ident,
-    Lit, Path,
-};
+use syn::{parse_macro_input, parse_quote, Error, Expr, ExprLit, FnArg, Ident, Lit, Token};
+use uuid::Uuid;
 use win_etw_metadata::{InFlag, OutFlag};
+
+#[cfg(test)]
+mod tests;
 
 fn err_spanned<T: quote::ToTokens>(item: &T, msg: &str) -> TokenStream {
     Error::new_spanned(item, msg).to_compile_error()
@@ -26,7 +27,7 @@ fn create_provider_metadata(provider_name: &Ident, provider_metadata_ident: &Ide
 
     let provider_metadata_len = 2 + provider_name.len() + 1;
     if provider_metadata_len > 0xffff {
-        return err_spanned(&provider_name, "The provider name is excessively long.");
+        return err_spanned(&provider_name, "The provider name is too long.");
     }
     provider_metadata.push((provider_metadata_len & 0xff) as u8);
     provider_metadata.push((provider_metadata_len >> 8) as u8);
@@ -72,7 +73,7 @@ struct UnsupportedField;
 fn parse_event_field(
     errors: &mut Vec<Error>,
     well_known_types: &WellKnownTypes,
-    event_attr: Option<&Attribute>,
+    event_attr: Option<&syn::Attribute>,
     field_span: proc_macro2::Span,
     field_name: &Ident,
     field_ty: &mut syn::Type,
@@ -105,7 +106,9 @@ fn parse_event_field(
                 for item in list.nested.iter() {
                     match item {
                         syn::NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue {
-                            path, lit, ..
+                            path,
+                            lit,
+                            ..
                         })) => {
                             if *path == parse_quote!(output) {
                                 match &lit {
@@ -375,25 +378,272 @@ fn parse_event_field(
     Ok(())
 }
 
+macro_rules! if_let_guard {
+    (
+        $p:pat = $e:expr => ($result:expr) else $return_expr:expr
+    ) => {
+        if let $p = $e {
+            $result
+        } else {
+            return $return_expr;
+        };
+    };
+}
 
+/// Represents the "attribute" parameter of the `#[trace_logging_events]` proc macro.
+struct LoggingEventAttributes {
+    uuid: Uuid,
+    // items: syn::punctuated::Punctuated<syn::Meta, Token![,]>,
+}
+
+impl syn::parse::Parse for LoggingEventAttributes {
+    fn parse(stream: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut uuid_opt = None;
+        let items: syn::punctuated::Punctuated<syn::Meta, Token![,]> =
+            stream.parse_terminated(syn::Meta::parse)?;
+
+        for item in items.iter() {
+            match item {
+                syn::Meta::NameValue(syn::MetaNameValue { path, lit, .. }) => {
+                    if *path == parse_quote!(guid) {
+                        if uuid_opt.is_some() {
+                            return Err(Error::new_spanned(
+                                item,
+                                "The 'guid' attribute key cannot be specified more than once.",
+                            ));
+                        }
+                        let s = if_let_guard!(syn::Lit::Str(s) = lit => (s)
+                            else Err(Error::new_spanned(lit, "The attribute value is required to be a GUID in string form.")));
+
+                        let guid_str = s.value();
+                        let uuid = if_let_guard!(Ok(s) = guid_str.parse::<Uuid>() => (s)
+                            else Err(Error::new_spanned(lit, "The attribute value is required to be a valid GUID.")));
+
+                        if uuid == Uuid::nil() {
+                            return Err(Error::new_spanned(lit, "The GUID is required to be valid; the all-zeroes pattern is not valid."));
+                        }
+
+                        uuid_opt = Some(uuid);
+                    } else {
+                        return Err(Error::new_spanned(item, "Unrecognized key name"));
+                    }
+                }
+                _ => {
+                    return Err(Error::new_spanned(item, "Unrecognized attributes"));
+                }
+            }
+        }
+
+        // TODO: We could generate a deterministic GUID by hashing the event provider name or the
+        // signatures of the event methods. Both of those approaches have problems, unfortunately.
+        // It's best to require developers to specify a GUID.
+        //
+        // I considered generating a GUID and printing it in the error message, but I decided not
+        // to do that because it introduces non-determinism.
+        let uuid = if_let_guard!(Some(provider_uuid) = uuid_opt => (provider_uuid) else {
+            Err(Error::new_spanned(&items,
+                "The 'guid' attribute is required.
+Please generate a GUID that uniquely identfies this event source.
+Do not use the same GUID for different event sources.
+Example: #[trace_logging_events(guid = \"123e4567-e89b...\")]"
+            ))
+        });
+
+        Ok(LoggingEventAttributes { uuid })
+    }
+}
+
+fn uuid_to_expr(uuid: &Uuid) -> syn::Expr {
+    let bytes: &[u8; 16] = uuid.as_bytes();
+    let data1: u32 = ((bytes[0] as u32) << 24)
+        | ((bytes[1] as u32) << 16)
+        | ((bytes[2] as u32) << 8)
+        | (bytes[3] as u32);
+    let data2: u16 = ((bytes[4] as u16) << 8) | (bytes[5] as u16);
+    let data3: u16 = ((bytes[6] as u16) << 8) | (bytes[7] as u16);
+    let data4_0 = bytes[8];
+    let data4_1 = bytes[9];
+    let data4_2 = bytes[10];
+    let data4_3 = bytes[11];
+    let data4_4 = bytes[12];
+    let data4_5 = bytes[13];
+    let data4_6 = bytes[14];
+    let data4_7 = bytes[15];
+    return parse_quote! {
+        ::win_etw_provider::types::GUID {
+            Data1: #data1,
+            Data2: #data2,
+            Data3: #data3,
+            Data4: [
+                #data4_0,
+                #data4_1,
+                #data4_2,
+                #data4_3,
+                #data4_4,
+                #data4_5,
+                #data4_6,
+                #data4_7,
+            ]
+        }
+    };
+}
+
+struct EventAttributes {
+    level: syn::Expr,
+    opcode: syn::Expr,
+    task: syn::Expr,
+    method_attrs: Vec<syn::Attribute>,
+}
+
+fn parse_event_attributes(
+    errors: &mut Vec<Error>,
+    method_ident: &Ident,
+    input_method_attrs: &[syn::Attribute],
+) -> EventAttributes {
+    let mut level: Expr = parse_quote!(::win_etw_provider::metadata::EVENT_LEVEL_INFO);
+    let mut opcode: Expr = parse_quote!(0);
+    let mut task: Expr = parse_quote!(0);
+
+    let mut method_attrs: Vec<syn::Attribute> = Vec::new();
+
+    let mut event_already_has_doc = false;
+
+    for attr in input_method_attrs.iter() {
+        if attr.path == parse_quote!(doc) {
+            method_attrs.push(attr.clone());
+            event_already_has_doc = true;
+        } else if attr.path == parse_quote!(event) {
+            // The #[event] attribute lets the application specify the level, opcode, task,
+            // keyword, etc.
+            match attr.parse_meta() {
+                Ok(syn::Meta::List(list)) => {
+                    for item in list.nested.iter() {
+                        match item {
+                            syn::NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue {
+                                path,
+                                lit,
+                                ..
+                            })) => {
+                                if *path == parse_quote!(level) {
+                                    match lit {
+                                        Lit::Str(lit_str) => match lit_str.value().as_str() {
+                                            "error" => {
+                                                level = parse_quote!(
+                                                    ::win_etw_provider::metadata::EVENT_LEVEL_ERROR
+                                                )
+                                            }
+                                            "warn" => {
+                                                level = parse_quote!(
+                                                    ::win_etw_provider::metadata::EVENT_LEVEL_WARN
+                                                )
+                                            }
+                                            "info" => {
+                                                level = parse_quote!(
+                                                    ::win_etw_provider::metadata::EVENT_LEVEL_INFO
+                                                )
+                                            }
+                                            "debug" => {
+                                                level = parse_quote!(
+                                                    ::win_etw_provider::metadata::EVENT_LEVEL_DEBUG
+                                                )
+                                            }
+                                            "trace" => {
+                                                level = parse_quote!(
+                                                    ::win_etw_provider::metadata::EVENT_LEVEL_TRACE
+                                                )
+                                            }
+                                            _ => {
+                                                errors.push(Error::new_spanned(item, "The value specified for 'level' is not a valid string."));
+                                            }
+                                        },
+                                        Lit::Int(_) => {
+                                            level = Expr::Lit(ExprLit {
+                                                lit: lit.clone(),
+                                                attrs: Vec::new(),
+                                            });
+                                        }
+                                        _ => {
+                                            errors.push(Error::new_spanned(item, "The value specified for 'level' is not recognized."));
+                                        }
+                                    }
+                                } else if *path == parse_quote!(opcode) {
+                                    opcode = Expr::Lit(ExprLit {
+                                        lit: lit.clone(),
+                                        attrs: Vec::new(),
+                                    });
+                                } else if *path == parse_quote!(task) {
+                                    task = Expr::Lit(ExprLit {
+                                        lit: lit.clone(),
+                                        attrs: Vec::new(),
+                                    });
+                                } else {
+                                    errors.push(Error::new_spanned(item, "Unrecognized attribute."));
+                                }
+                            }
+                            _ => {
+                                errors.push(Error::new_spanned(item, "Unrecognized attribute."));
+                            }
+                        }
+                    }
+                }
+                Ok(_) => {
+                    errors.push(Error::new_spanned(
+                        attr,
+                        "The form of the #[event] attribute is invalid. \
+                        It should be: #[event(name = \"value\", name2 = \"value2\", ...)].",
+                    ));
+                }
+                Err(e) => {
+                    errors.push(e);
+                }
+            }
+        } else {
+            errors.push(Error::new_spanned(
+                attr,
+                "The only attributes allowed on event methods are #[doc] and #[event(...)] attributes.",
+            ));
+        }
+    }
+
+    if !event_already_has_doc {
+        let method_doc = format!(
+            "Writes the `{}` event to the ETW log stream.",
+            method_ident.to_string()
+        );
+        method_attrs.push(parse_quote!( #![doc = #method_doc] ));
+    }
+
+    EventAttributes {
+        method_attrs,
+        level,
+        opcode,
+        task,
+    }
+}
+
+// #[cfg(not(test))]
 #[proc_macro_attribute]
 pub fn trace_logging_events(
-    _attr: proc_macro::TokenStream,
+    attr: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    /*
-    let attr_meta = parse_macro_input!(attr as syn::Meta);
-    println!("attr_meta = {:?}", attr_meta);
-    */
+    let logging_trait = parse_macro_input!(input as syn::ItemTrait);
+    let output = trace_logging_events_core(attr.into(), logging_trait);
+    output.into()
+}
 
-    let logging_item = parse_macro_input!(input as syn::Item);
-    let logging_trait = if let syn::Item::Trait(ref t) = &logging_item {
-        t
-    } else {
-        panic!("The input item is required to be a trait.");
-    };
-
+fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -> TokenStream {
     let mut errors: Vec<Error> = Vec::new();
+
+    // println!("parsing attributes: {:#?}", attr);
+    let provider_attrs: LoggingEventAttributes = match syn::parse2::<LoggingEventAttributes>(attr) {
+        Ok(p) => p,
+        Err(e) => {
+            // println!("failed to parse attributes: {:?}", e);
+            errors.push(e);
+            LoggingEventAttributes { uuid: Uuid::nil() }
+        }
+    };
 
     let provider_name = &logging_trait.ident;
     let provider_name_string = provider_name.to_string();
@@ -506,7 +756,7 @@ pub fn trace_logging_events(
                 }
 
                 FnArg::Typed(param_typed) => {
-                    let mut event_attr: Option<Attribute> = None;
+                    let mut event_attr: Option<syn::Attribute> = None;
                     param_typed.attrs.retain(|a| {
                         if a.path == parse_quote!(event) {
                             event_attr = Some(a.clone());
@@ -578,125 +828,14 @@ pub fn trace_logging_events(
         event_metadata[0] = parse_quote! { #event_metadata_len_b0 };
         event_metadata[1] = parse_quote! { #event_metadata_len_b1 };
 
-        let doc_path: Path = parse_quote!(doc);
-        let event_path: Path = parse_quote!(event);
-        let opcode_path: Path = parse_quote!(opcode);
-
-        let mut method_attrs = Vec::new();
-        let mut event_already_has_doc = false;
-
-        let level_path: Path = parse_quote!(level);
-        let task_path: Path = parse_quote!(task);
-
-        let mut event_level: Expr = parse_quote!(::win_etw_provider::metadata::EVENT_LEVEL_INFO);
-        let mut event_opcode: Expr = parse_quote!(0);
-        let mut event_task: Expr = parse_quote!(0);
-
-        for attr in method.attrs.iter() {
-            if attr.path == doc_path {
-                method_attrs.push(attr.clone());
-                event_already_has_doc = true;
-            } else if attr.path == event_path {
-                // The #[event] attribute lets the application specify the level, opcode, task,
-                // keyword, etc.
-                match attr.parse_meta() {
-                    Ok(syn::Meta::List(list)) => {
-                        for item in list.nested.iter() {
-                            match item {
-                                syn::NestedMeta::Meta(syn::Meta::NameValue(syn::MetaNameValue {
-                                    path,
-                                    lit,
-                                    ..
-                                })) => {
-                                    if *path == level_path {
-                                        match lit {
-                                            Lit::Str(lit_str) => match lit_str.value().as_str() {
-                                                "error" => {
-                                                    event_level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_ERROR
-                                                )
-                                                }
-                                                "warn" => {
-                                                    event_level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_WARN
-                                                )
-                                                }
-                                                "info" => {
-                                                    event_level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_INFO
-                                                )
-                                                }
-                                                "debug" => {
-                                                    event_level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_DEBUG
-                                                )
-                                                }
-                                                "trace" => {
-                                                    event_level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_TRACE
-                                                )
-                                                }
-                                                _ => {
-                                                    errors.push(Error::new_spanned(item, "The value specified for 'level' is not a valid string."));
-                                                }
-                                            },
-                                            Lit::Int(_) => {
-                                                event_level = Expr::Lit(ExprLit {
-                                                    lit: lit.clone(),
-                                                    attrs: Vec::new(),
-                                                });
-                                            }
-                                            _ => {
-                                                errors.push(Error::new_spanned(item, "The value specified for 'level' is not recognized."));
-                                            }
-                                        }
-                                    } else if *path == opcode_path {
-                                        event_opcode = Expr::Lit(ExprLit {
-                                            lit: lit.clone(),
-                                            attrs: Vec::new(),
-                                        });
-                                    } else if *path == task_path {
-                                        event_task = Expr::Lit(ExprLit {
-                                            lit: lit.clone(),
-                                            attrs: Vec::new(),
-                                        });
-                                    } else {
-                                        // println!("  unrecognized event arg: {:?}", path);
-                                    }
-                                }
-                                _ => {
-                                    // println!("   unrecognized: {:?}", item);
-                                }
-                            }
-                        }
-                    }
-                    Ok(_) => {
-                        errors.push(Error::new_spanned(
-                            &attr,
-                            "The form of the #[event] attribute is invalid. \
-                            It should be: #[event(name = \"value\", name2 = \"value2\", ...)].",
-                        ));
-                    }
-                    Err(e) => {
-                        errors.push(e);
-                    }
-                }
-            } else {
-                errors.push(Error::new_spanned(
-                    &method.sig,
-                    "The only attributes allowed on event methods are #[doc] attributes.",
-                ));
-            }
-        }
-
-        if !event_already_has_doc {
-            let method_doc = format!("Writes the `{}` event to the ETW log stream.", event_name);
-            method_attrs.push(parse_quote!( #![doc = #method_doc] ));
-        }
+        let event_attrs = parse_event_attributes(&mut errors, &method.sig.ident, &method.attrs);
 
         // Build the method that implements this event.
+        let event_level = event_attrs.level;
+        let event_opcode = event_attrs.opcode;
+        let event_task = event_attrs.task;
         let m = syn::ImplItemMethod {
-            attrs: method_attrs,
+            attrs: event_attrs.method_attrs,
             defaultness: None,
             sig,
             vis: parse_quote! { pub },
@@ -732,15 +871,29 @@ pub fn trace_logging_events(
                     ];
                     self.provider.write(&EVENT_DESCRIPTOR, &data_descriptors);
                 }
-            }).unwrap(),
+            })
+            .unwrap(),
         };
 
         output_impl.items.push(syn::ImplItem::Method(m));
     }
 
+    let provider_guid_const = uuid_to_expr(&provider_attrs.uuid);
+    output_impl.items.push(parse_quote! {
+        pub const PROVIDER_GUID: ::win_etw_provider::types::GUID = #provider_guid_const;
+    });
+    output_impl.items.push(
+        parse_quote! {pub fn register() -> core::result::Result<Self, ::win_etw_provider::Error> {
+            Ok(Self {
+                provider: ::win_etw_provider::EventProvider::register(&Self::PROVIDER_GUID)?,
+            })
+        }},
+    );
+
+    let vis = logging_trait.vis.clone();
     output.extend(quote! {
-        pub struct #provider_name {
-            pub provider: ::win_etw_provider::provider::EventProvider,
+        #vis struct #provider_name {
+            provider: ::win_etw_provider::provider::EventProvider,
         }
 
         #output_impl

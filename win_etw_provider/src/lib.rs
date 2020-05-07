@@ -16,3 +16,9 @@ pub use win_etw_metadata as metadata;
 mod data_descriptor;
 
 pub use data_descriptor::EventDataDescriptor;
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Error {
+    /// A Windows (Win32) error code.
+    WindowsError(u32),
+}
