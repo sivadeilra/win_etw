@@ -179,6 +179,34 @@ test_case! {
 
 test_case! {
     #[test]
+    fn test_unsupported_field_types();
+    input: {
+        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        trait Events {
+            fn event(&self, a: ());
+        }
+    }
+    expected_errors: [
+        "This type is not supported for event parameters.",
+    ]
+}
+
+test_case! {
+    #[test]
+    fn test_event_return_type();
+    input: {
+        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        trait Events {
+            fn event(&self) -> String;
+        }
+    }
+    expected_errors: [
+        "Event methods must not return data.",
+    ]
+}
+
+test_case! {
+    #[test]
     fn test_missing_self();
     input: {
         #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
@@ -272,7 +300,7 @@ test_case! {
 
 test_case! {
     #[test]
-    fn test_zero_guid();
+    fn test_nil_guid();
     input: {
         #[trace_logging_events(guid = "00000000-0000-0000-0000-000000000000")]
         trait Events {}

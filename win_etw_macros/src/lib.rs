@@ -1,7 +1,5 @@
-//! Allows you to create ETW Trace Logging Providers.
-//!
-//! This module provides the `#[trace_logging_events]` macro, which allows you to define a
-//! Trace Logging Provider.
+//! Provides the `#[trace_logging_events]` macro, which allows you to define a Trace Logging
+//! Provider for use with the Event Tracing for Windows (ETW) framework.
 //!
 //! This macro is intended for use only when targeting Windows. When targeting other platforms,
 //! this macro will still work, but will generate code that does nothing.
@@ -117,7 +115,7 @@
 
 extern crate proc_macro;
 
-use proc_macro2::{Span, TokenStream};
+use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use std::iter::Extend;
 use syn::spanned::Spanned;
@@ -157,20 +155,9 @@ fn create_provider_metadata(provider_name: &Ident, provider_metadata_ident: &Ide
     }
 }
 
-fn append_utf8_str_chars(output: &mut Vec<Expr>, s: &str, span: Span) {
-    // event_metadata.extend_from_slice(param_name_string.as_bytes());
-    for c in s.chars() {
-        if s.is_ascii() {
-            output.push(syn::Expr::Lit(syn::ExprLit {
-                attrs: Vec::new(),
-                lit: Lit::Byte(syn::LitByte::new(c as u8, span)),
-                // lit: parse_quote!{ #c as u8 },
-                // lit: Lit::Char(syn::LitChar::new(c, span)),
-            }));
-        } else {
-            // This can be implemented, just isn't yet.
-            unimplemented!("non-ascii text in string");
-        }
+fn append_utf8_str_chars(output: &mut Vec<Expr>, s: &str) {
+    for &b in s.as_bytes().iter() {
+        output.push(parse_quote! { #b });
     }
     // Add the NUL byte at the end.
     output.push(parse_quote! { 0 });
@@ -178,6 +165,7 @@ fn append_utf8_str_chars(output: &mut Vec<Expr>, s: &str, span: Span) {
 
 struct UnsupportedField;
 
+/// Parses one event field. Event fields are declared as function parameters.
 ///
 /// * `event_metadata`: This builds the static [u8; N] array that contains the metadata for this
 ///   event. It can contain literals, symbolic expressions, etc.
@@ -206,7 +194,7 @@ fn parse_event_field(
     // };
 
     let param_name_string = field_name.to_string();
-    append_utf8_str_chars(event_metadata, &param_name_string, field_span);
+    append_utf8_str_chars(event_metadata, &param_name_string);
     // We will append more data to event_metadata, below.
 
     // The user can annotate fields with #[event(...)] in order to specify output formats.
@@ -230,34 +218,34 @@ fn parse_event_field(
                                                 output_hex = true;
                                             }
                                             _ => {
-                                                errors.push(Error::new(
-                                                    path.span(),
+                                                errors.push(Error::new_spanned(
+                                                    path,
                                                     "Output format is not recognized.",
                                                 ));
                                             }
                                         }
                                     }
-                                    _ => errors.push(Error::new(
-                                        path.span(),
+                                    _ => errors.push(Error::new_spanned(
+                                        path,
                                         "This metadata is expected to be a string.",
                                     )),
                                 }
                             } else {
-                                errors.push(Error::new(
-                                    path.span(),
+                                errors.push(Error::new_spanned(
+                                    path,
                                     "This metadata key is not recognized.",
                                 ));
                             }
                         }
-                        _ => errors.push(Error::new(
-                            item.span(),
+                        _ => errors.push(Error::new_spanned(
+                            item,
                             "This metadata item is not recognized.",
                         )),
                     }
                 }
             }
-            Ok(_) => errors.push(Error::new(
-                event_attr.span(),
+            Ok(_) => errors.push(Error::new_spanned(
+                event_attr,
                 "This metadata is not recognized.",
             )),
             Err(e) => {
@@ -435,7 +423,6 @@ fn parse_event_field(
                             if !t.primitive {
                                 return Err(UnsupportedField);
                             }
-                            // println!("slice type, with element: {:?}", slice_ty.elem);
                             // Slices are encoded using two data descriptors.
                             // The first is for the length field, the second for the data.
                             let field_len_ident = Ident::new(
@@ -504,7 +491,6 @@ macro_rules! if_let_guard {
 /// Represents the "attribute" parameter of the `#[trace_logging_events]` proc macro.
 struct LoggingEventAttributes {
     uuid: Uuid,
-    // items: syn::punctuated::Punctuated<syn::Meta, Token![,]>,
 }
 
 impl syn::parse::Parse for LoggingEventAttributes {
@@ -829,6 +815,16 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
             ));
         }
 
+        match &method.sig.output {
+            syn::ReturnType::Default => {}
+            _ => {
+                errors.push(Error::new(
+                    method.span(),
+                    "Event methods must not return data.",
+                ));
+            }
+        }
+
         let event_name: String = method.sig.ident.to_string();
 
         // Here we build the data descriptor array. The data descriptor array is constructed on
@@ -847,10 +843,10 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
         // See comments in traceloggingprovider.h, around line 2300, which describe the
         // encoding of the event mdata.
         let mut event_metadata: Vec<Expr> = Vec::new();
-        event_metadata.push(parse_quote! { 0 }); // reserve space for the size
-        event_metadata.push(parse_quote! { 0 });
+        event_metadata.push(parse_quote! { 0 }); // reserve space for the size (byte 0)
+        event_metadata.push(parse_quote! { 0 }); // reserve space for the size (byte 1)
         event_metadata.push(parse_quote! { 0 }); // no extensions
-        append_utf8_str_chars(&mut event_metadata, &event_name, method.span());
+        append_utf8_str_chars(&mut event_metadata, &event_name);
 
         // Some fields require running some code before building the data descriptors, so we
         // collect statements here.
@@ -1017,6 +1013,7 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
         }},
     );
 
+    // We propagate the visibility of the trait definition to the structure definition.
     let vis = logging_trait.vis.clone();
     output.extend(quote! {
         #vis struct #provider_name {
@@ -1035,6 +1032,8 @@ struct WellKnownTypeInfo {
     code: WellKnownType,
     in_type: InFlag,
     is_ref: bool,
+    /// Indicates whether this type can be used in a slice, e.g. &[T].
+    /// Should probably rename to `can_slice`.
     primitive: bool,
     opts: WellKnownTypeOptions,
 }
@@ -1055,7 +1054,7 @@ macro_rules! well_known_types{
                 is_ref: $is_ref:expr,
                 primitive: $primitive:expr,
                 in_type: $in_type:expr,
-                $( $opt_name:ident: $opt_value:expr,  )*
+                $( $opt_name:ident: $opt_value:expr, )*
             }
         )*
     ) => {
@@ -1180,7 +1179,6 @@ well_known_types! {
         in_type: InFlag::FILETIME,
         replacement_type: Some(parse_quote!(::win_etw_provider::types::FILETIME)),
     }
-
     HRESULT: HRESULT => {
         is_ref: false,
         primitive: false,
@@ -1188,7 +1186,6 @@ well_known_types! {
         replacement_type: Some(parse_quote!(i32)),
         out_type: Some(OutFlag::HRESULT),
     }
-
     WIN32ERROR: WIN32ERROR => {
         is_ref: false,
         primitive: false,
@@ -1196,7 +1193,6 @@ well_known_types! {
         replacement_type: Some(parse_quote!(u32)),
         out_type: Some(OutFlag::WIN32ERROR),
     }
-
     NTSTATUS: NTSTATUS => {
         is_ref: false,
         primitive: false,
@@ -1204,8 +1200,4 @@ well_known_types! {
         replacement_type: Some(parse_quote!(u32)),
         out_type: Some(OutFlag::NTSTATUS),
     }
-
-    // SocketAddrV6: &SocketAddrV6, { in_type: 0, is_ref: true, None, };
-    // usize, in_type: ;
-    // isize, in_type: ;
 }

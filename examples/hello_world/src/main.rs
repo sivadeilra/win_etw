@@ -1,12 +1,9 @@
 #![allow(clippy::unreadable_literal)]
 #![forbid(unsafe_code)]
 
-// use widestring::U16CString;
+use std::time::SystemTime;
 use win_etw_provider::guid;
 use win_etw_provider::types::FILETIME;
-// use win_etw_provider::*;
-
-use std::time::SystemTime;
 use winapi::shared::guiddef::GUID;
 use winapi::shared::ntstatus;
 use winapi::shared::winerror;
@@ -20,7 +17,6 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 fn main() {
     let hello_provider = HelloWorldProvider::register().unwrap();
-    println!("successfully registered provider.");
 
     hello_provider.arg_str("Hello, world!");
     hello_provider.arg_slice_u8(&[44, 55, 66]);
@@ -55,9 +51,6 @@ use win_etw_macros::trace_logging_events;
 
 #[trace_logging_events(guid = "861A3948-3B6B-4DDF-B862-B2CB361E238E")]
 trait HelloWorldProvider {
-    /// Writes down that time that we bought ice cream.
-    // fn buy_ice_cream(&self, a: i32, b: u8);
-
     fn arg_i32(&self, a: i32);
     fn arg_u8(&self, a: u8);
 
@@ -165,34 +158,4 @@ trait TestManyEvents {
     fn arg_hresult(&self, a: HRESULT);
     fn arg_ntstatus(&self, a: NTSTATUS);
     fn arg_win32error(&self, a: WIN32ERROR);
-}
-
-#[cfg(feature = "negative_testing")]
-mod negative_testing {
-    use super::*;
-
-    #[trace_logging_events]
-    trait ProviderMissingGuid {}
-
-    #[trace_logging_events(guid = "bad guid")]
-    trait ProviderBadGuid {
-        fn bad_arg(&self, a: ());
-    }
-
-    #[trace_logging_events(guid = "00000000-0000-0000-0000000000000000")]
-    trait ProviderZeroGuid {}
-
-    #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
-    trait TestingErrors {
-        fn missing_self(a: i32);
-        fn bad_self_mutable(&mut self);
-        fn bad_self_by_value(self);
-        fn bad_self_lifetime<'a>(&'a self);
-        fn bad_self_box(self: Box<Self>);
-        fn bad_arg(&self, a: ());
-        fn bad_arg_ref_string(&self, a: &String);
-        fn bad_arg_string(&self, a: String);
-        fn bad_arg_slice(&self, a: &[()]);
-        fn bad_arg_slice_str(&self, a: &[&str]);
-    }
 }
