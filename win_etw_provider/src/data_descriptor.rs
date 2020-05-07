@@ -1,7 +1,7 @@
+use crate::guid::GUID;
 use core::marker::PhantomData;
 use core::mem::size_of;
 use widestring::U16CStr;
-use winapi::shared::guiddef::GUID;
 use zerocopy::AsBytes;
 
 /// This type is equivalent to the Win32 structure `EVENT_DATA_DESCRIPTOR`, and its representation

@@ -6,11 +6,11 @@ macro_rules! guid {
         $c:expr,
         $d:expr
     ) => {
-        winapi::shared::guiddef::GUID {
-            Data1: $a,
-            Data2: $b,
-            Data3: $c,
-            Data4: $d,
+        $crate::types::GUID {
+            data1: $a,
+            data2: $b,
+            data3: $c,
+            data4: $d,
         }
     };
 
@@ -27,11 +27,31 @@ macro_rules! guid {
         $d6:expr,
         $d7:expr
     ) => {
-        winapi::shared::guiddef::GUID {
-            Data1: $a,
-            Data2: $b,
-            Data3: $c,
-            Data4: [$d0, $d1, $d2, $d3, $d4, $d5, $d6, $d7],
+        $crate::types::GUID {
+            data1: $a,
+            data2: $b,
+            data3: $c,
+            data4: [$d0, $d1, $d2, $d3, $d4, $d5, $d6, $d7],
         }
     };
+}
+
+#[repr(C)]
+pub struct GUID {
+    pub data1: u32,
+    pub data2: u16,
+    pub data3: u16,
+    pub data4: [u8; 8],
+}
+
+#[cfg(target_os = "windows")]
+impl From<winapi::shared::guiddef::GUID> for GUID {
+    fn from(value: winapi::shared::guiddef::GUID) -> Self {
+        Self {
+            data1: value.Data1,
+            data2: value.Data2,
+            data3: value.Data3,
+            data4: value.Data4,
+        }
+    }
 }

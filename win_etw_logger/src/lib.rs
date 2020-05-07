@@ -4,6 +4,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 #![allow(clippy::unreadable_literal)]
+#![allow(clippy::useless_let_if_seq)]
 
 extern crate alloc;
 use alloc::string::{String, ToString};
@@ -19,7 +20,7 @@ pub struct TraceLogger {
 impl TraceLogger {
     /// Registers the `TraceLogger` with ETW.
     pub fn new() -> Result<Self, win_etw_provider::Error> {
-        let provider = RustLogProvider::register()?;
+        let provider = RustLogProvider::new()?;
         Ok(TraceLogger {
             provider,
             log_module_path: AtomicBool::new(true),

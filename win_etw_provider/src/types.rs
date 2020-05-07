@@ -1,7 +1,7 @@
 use crate::EventDataDescriptor;
 use zerocopy::AsBytes;
 
-pub use winapi::shared::guiddef::GUID;
+pub use crate::guid::GUID;
 
 pub const AF_INET: u16 = 2;
 pub const AF_INET6: u16 = 23;

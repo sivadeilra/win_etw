@@ -2,11 +2,18 @@
 #![forbid(unsafe_code)]
 
 use std::time::SystemTime;
-use win_etw_provider::guid;
+use win_etw_provider::{guid, guid::GUID};
 use win_etw_provider::types::FILETIME;
-use winapi::shared::guiddef::GUID;
-use winapi::shared::ntstatus;
-use winapi::shared::winerror;
+
+#[cfg(target_os = "windows")]
+mod windows_stuff {
+    pub use winapi::shared::guiddef::GUID;
+    pub use winapi::shared::ntstatus;
+    pub use winapi::shared::winerror;    
+}
+#[cfg(target_os = "windows")]
+use windows_stuff::*;
+
 
 // {861A3948-3B6B-4DDF-B862-B2CB361E238E}
 // DEFINE_GUID(my_provider_guid, 0x861a3948, 0x3b6b, 0x4ddf, 0xb8, 0x62, 0xb2, 0xcb, 0x36, 0x1e, 0x23, 0x8e);
@@ -16,7 +23,7 @@ const PROVIDER_GUID: GUID =
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 fn main() {
-    let hello_provider = HelloWorldProvider::register().unwrap();
+    let hello_provider = HelloWorldProvider::new().unwrap();
 
     hello_provider.arg_str("Hello, world!");
     hello_provider.arg_slice_u8(&[44, 55, 66]);
@@ -42,9 +49,12 @@ fn main() {
 
     hello_provider.arg_u32_hex(0xcafef00d);
 
-    hello_provider.arg_hresult(winerror::DXGI_DDI_ERR_WASSTILLDRAWING);
-    hello_provider.arg_ntstatus(ntstatus::STATUS_DEVICE_REQUIRES_CLEANING as u32);
-    hello_provider.arg_win32error(winerror::ERROR_OUT_OF_PAPER);
+    #[cfg(target_os = "windows")]
+    {
+        hello_provider.arg_hresult(winerror::DXGI_DDI_ERR_WASSTILLDRAWING);
+        hello_provider.arg_ntstatus(ntstatus::STATUS_DEVICE_REQUIRES_CLEANING as u32);
+        hello_provider.arg_win32error(winerror::ERROR_OUT_OF_PAPER);
+    }
 }
 
 use win_etw_macros::trace_logging_events;

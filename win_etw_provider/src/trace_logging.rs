@@ -1,5 +1,7 @@
 //! https://docs.microsoft.com/en-us/windows/win32/tracelogging/trace-logging-about
 
+#![cfg(TODO)]
+
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 #![allow(unused)]

@@ -207,6 +207,48 @@ test_case! {
 
 test_case! {
     #[test]
+    fn test_event_default_implementation();
+    input: {
+        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        trait Events {
+            fn event(&self) { }
+        }
+    }
+    expected_errors: [
+        "Event methods must not contain an implementation.",
+    ]
+}
+
+test_case! {
+    #[test]
+    fn test_event_generic();
+    input: {
+        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        trait Events {
+            fn event<T>(&self);
+        }
+    }
+    expected_errors: [
+        "Generic event methods are not supported.",
+    ]
+}
+
+test_case! {
+    #[test]
+    fn test_event_generic_lifetime();
+    input: {
+        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        trait Events {
+            fn event<'a>(&self);
+        }
+    }
+    expected_errors: [
+        "Generic event methods are not supported.",
+    ]
+}
+
+test_case! {
+    #[test]
     fn test_missing_self();
     input: {
         #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]

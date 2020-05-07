@@ -1,13 +1,14 @@
+use crate::guid::GUID;
 use crate::{Error, EventDataDescriptor};
 use core::convert::TryFrom;
-// use core::ffi::c_void;
 use core::ptr::null_mut;
 use widestring::U16CStr;
+
+#[cfg(target_os = "windows")]
 use winapi::shared::evntprov;
-use winapi::shared::guiddef::GUID;
-// use winapi::shared::winerror;
 
 pub struct EventProvider {
+    #[cfg(target_os = "windows")]
     handle: evntprov::REGHANDLE,
     // enabled_callback: Option<&'a dyn EventProviderCallback>,
 }
@@ -91,16 +92,19 @@ impl EventProvider {
 
     #[inline(always)]
     pub fn write(&self, descriptor: &'static EventDescriptor, data: &[EventDataDescriptor<'_>]) {
-        unsafe {
-            let error = evntprov::EventWrite(
-                self.handle,
-                descriptor as *const _,
-                data.len() as u32,
-                data.as_ptr() as *const evntprov::EVENT_DATA_DESCRIPTOR
-                    as *mut evntprov::EVENT_DATA_DESCRIPTOR,
-            );
-            if error != 0 {
-                self.write_failed(error)
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                let error = evntprov::EventWrite(
+                    self.handle,
+                    descriptor as *const _ as *const evntprov::EVENT_DESCRIPTOR,
+                    data.len() as u32,
+                    data.as_ptr() as *const evntprov::EVENT_DATA_DESCRIPTOR
+                        as *mut evntprov::EVENT_DATA_DESCRIPTOR,
+                );
+                if error != 0 {
+                    self.write_failed(error)
+                }
             }
         }
     }
@@ -118,12 +122,15 @@ impl EventProvider {
     }
 
     pub fn write_string(&self, level: u8, keyword: u64, s: &U16CStr) {
-        unsafe {
-            let error = evntprov::EventWriteString(self.handle, level, keyword, s.as_ptr());
-            if error != 0 {
-                #[cfg(feature = "std")]
-                {
-                    println!("EventWriteString failed: {}", error);
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                let error = evntprov::EventWriteString(self.handle, level, keyword, s.as_ptr());
+                if error != 0 {
+                    #[cfg(feature = "std")]
+                    {
+                        println!("EventWriteString failed: {}", error);
+                    }
                 }
             }
         }
@@ -133,41 +140,62 @@ impl EventProvider {
     // write_transfer
 
     pub fn is_enabled(&self, level: u8, keyword: u64) -> bool {
-        unsafe { evntprov::EventProviderEnabled(self.handle, level, keyword) != 0 }
+        #[cfg(target_os = "windows")]
+        {
+            unsafe { evntprov::EventProviderEnabled(self.handle, level, keyword) != 0 }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            false
+        }
     }
 }
 
 impl EventProvider {
-    pub fn register(provider_id: &GUID) -> Result<EventProvider, Error> {
-        unsafe {
-            let mut handle: evntprov::REGHANDLE = 0;
-            let error =
-                evntprov::EventRegister(provider_id as *const GUID, None, null_mut(), &mut handle);
-            if error != 0 {
-                Err(Error::WindowsError(error))
-            } else {
-                Ok(EventProvider {
-                    handle,
-                    // enabled_callback: None,
-                })
+    pub fn new(provider_id: &GUID) -> Result<EventProvider, Error> {
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                let mut handle: evntprov::REGHANDLE = 0;
+                let error = evntprov::EventRegister(
+                    provider_id as *const _ as *const winapi::shared::guiddef::GUID,
+                    None,
+                    null_mut(),
+                    &mut handle,
+                );
+                if error != 0 {
+                    Err(Error::WindowsError(error))
+                } else {
+                    Ok(EventProvider {
+                        handle,
+                        // enabled_callback: None,
+                    })
+                }
             }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(EventProvider {})
         }
     }
 
     // See TraceLoggingRegisterEx in traceloggingprovider.h.
     // This registers provider metadata.
     pub fn register_provider_metadata(&mut self, provider_metadata: &'static [u8]) {
-        unsafe {
-            let error = evntprov::EventSetInformation(
-                self.handle,
-                2,
-                provider_metadata.as_ptr() as *mut winapi::ctypes::c_void,
-                u32::try_from(provider_metadata.len()).unwrap(),
-            );
-            if error != 0 {
-                #[cfg(feature = "std")]
-                {
-                    eprintln!("warning: call to EventSetInformation (to register event provider metadata) failed: {}", error);
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                let error = evntprov::EventSetInformation(
+                    self.handle,
+                    2,
+                    provider_metadata.as_ptr() as *mut winapi::ctypes::c_void,
+                    u32::try_from(provider_metadata.len()).unwrap(),
+                );
+                if error != 0 {
+                    #[cfg(feature = "std")]
+                    {
+                        eprintln!("warning: call to EventSetInformation (to register event provider metadata) failed: {}", error);
+                    }
                 }
             }
         }
@@ -176,37 +204,24 @@ impl EventProvider {
 
 impl Drop for EventProvider {
     fn drop(&mut self) {
-        unsafe {
-            evntprov::EventUnregister(self.handle);
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                evntprov::EventUnregister(self.handle);
+            }
         }
     }
 }
 
 unsafe impl<'a> Sync for EventProvider {}
 
-pub use evntprov::EVENT_DESCRIPTOR as EventDescriptor;
-
-#[macro_export]
-macro_rules! write_event {
-    (
-        $provider:expr,
-        $event_descriptor:expr
-
-        $(
-            , $arg:expr
-        )*
-    ) => {
-
-        $provider.write(
-            &$event_descriptor,
-            $(
-                &[
-                $crate::EventDataDescriptor::from(&$arg),
-                ]
-            )*
-        )
-    }
+#[repr(C)]
+pub struct EventDescriptor {
+    pub id: u16,
+    pub version: u8,
+    pub channel: u8,
+    pub level: u8,
+    pub opcode: u8,
+    pub task: u16,
+    pub keyword: u64,
 }
-
-#[cfg(test)]
-mod tests {}
