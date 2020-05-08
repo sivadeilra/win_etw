@@ -20,7 +20,7 @@ pub struct TraceLogger {
 impl TraceLogger {
     /// Registers the `TraceLogger` with ETW.
     pub fn new() -> Result<Self, win_etw_provider::Error> {
-        let provider = RustLogProvider::new()?;
+        let provider = RustLogProvider::new();
         Ok(TraceLogger {
             provider,
             log_module_path: AtomicBool::new(true),

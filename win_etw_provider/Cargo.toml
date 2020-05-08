@@ -7,7 +7,7 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-winapi = { version = "0.3.8", features = ["evntprov", "winerror"] }
+winapi = { version = "0.3.8", features = ["evntprov", "winerror", "evntrace"] }
 widestring = "0.4.0"
 zerocopy = "0.3.0"
 win_etw_macros = { path = "../win_etw_macros" }

@@ -1,22 +1,83 @@
 use crate::guid::GUID;
 use crate::{Error, EventDataDescriptor};
 use core::convert::TryFrom;
-use core::ptr::{null, null_mut};
+use core::pin::Pin;
+use core::ptr::null;
+use core::sync::atomic::{AtomicU8, Ordering::SeqCst};
 
 #[cfg(target_os = "windows")]
-use winapi::shared::evntprov;
+use win_support::*;
 
-#[cfg(target_os = "windows")]
-use winapi::shared::winerror;
+pub trait Provider {
+    fn write(
+        &self,
+        options: Option<&crate::EventOptions>,
+        descriptor: &EventDescriptor,
+        data: &[EventDataDescriptor<'_>],
+    );
 
-pub struct EventProvider {
-    #[cfg(target_os = "windows")]
-    handle: evntprov::REGHANDLE,
+    fn is_enabled(&self, level: u8, keyword: u64) -> bool;
+    fn is_event_enabled(&self, event_descriptor: &EventDescriptor) -> bool;
 }
 
-impl EventProvider {
+pub struct NullProvider;
+
+impl Provider for NullProvider {
+    fn write(
+        &self,
+        _options: Option<&crate::EventOptions>,
+        _descriptor: &EventDescriptor,
+        _data: &[EventDataDescriptor<'_>],
+    ) {
+    }
+
+    fn is_enabled(&self, _level: u8, _keyword: u64) -> bool {
+        false
+    }
+    fn is_event_enabled(&self, _event_descriptor: &EventDescriptor) -> bool {
+        false
+    }
+}
+
+impl<T: Provider> Provider for Option<T> {
+    fn write(
+        &self,
+        options: Option<&crate::EventOptions>,
+        descriptor: &EventDescriptor,
+        data: &[EventDataDescriptor<'_>],
+    ) {
+        match self {
+            Some(p) => p.write(options, descriptor, data),
+            None => {}
+        }
+    }
+
+    fn is_enabled(&self, level: u8, keyword: u64) -> bool {
+        match self {
+            Some(p) => p.is_enabled(level, keyword),
+            None => false,
+        }
+    }
+    fn is_event_enabled(&self, event_descriptor: &EventDescriptor) -> bool {
+        match self {
+            Some(p) => p.is_event_enabled(event_descriptor),
+            None => false,
+        }
+    }
+}
+
+pub struct EtwProvider {
+    #[cfg(target_os = "windows")]
+    handle: evntprov::REGHANDLE,
+
+    #[cfg(target_os = "windows")]
+    #[allow(dead_code)] // Needed for lifetime control
+    stable: Pin<Box<StableProviderData>>,
+}
+
+impl Provider for EtwProvider {
     #[inline(always)]
-    pub fn write(
+    fn write(
         &self,
         options: Option<&crate::EventOptions>,
         descriptor: &EventDescriptor,
@@ -51,53 +112,28 @@ impl EventProvider {
                     }
                 }
 
-                let use_ex = true;
-                let error;
-
-                if use_ex {
-                    error = evntprov::EventWriteEx(
-                        self.handle,
-                        &event_descriptor,
-                        0,                       // filter
-                        0,                       // flags
-                        activity_id_ptr,         // activity id
-                        related_activity_id_ptr, // related activity id
-                        data.len() as u32,
-                        data.as_ptr() as *const evntprov::EVENT_DATA_DESCRIPTOR
-                            as *mut evntprov::EVENT_DATA_DESCRIPTOR,
-                    );
-                } else {
-                    error = evntprov::EventWrite(
-                        self.handle,
-                        descriptor as *const _ as *const evntprov::EVENT_DESCRIPTOR,
-                        data.len() as u32,
-                        data.as_ptr() as *const evntprov::EVENT_DATA_DESCRIPTOR
-                            as *mut evntprov::EVENT_DATA_DESCRIPTOR,
-                    );
-                }
+                let error = evntprov::EventWriteEx(
+                    self.handle,
+                    &event_descriptor,
+                    0,                       // filter
+                    0,                       // flags
+                    activity_id_ptr,         // activity id
+                    related_activity_id_ptr, // related activity id
+                    data.len() as u32,
+                    data.as_ptr() as *const evntprov::EVENT_DATA_DESCRIPTOR
+                        as *mut evntprov::EVENT_DATA_DESCRIPTOR,
+                );
                 if error != 0 {
-                    self.write_failed(error)
+                    write_failed(error)
                 }
             }
-        }
-    }
-
-    #[inline(never)]
-    fn write_failed(&self, error: u32) {
-        #[cfg(feature = "std")]
-        {
-            println!("EventWrite failed: {}", error);
-        }
-        #[cfg(not(feature = "std"))]
-        {
-            let _ = error;
         }
     }
 
     // write_ex
     // write_transfer
 
-    pub fn is_enabled(&self, level: u8, keyword: u64) -> bool {
+    fn is_enabled(&self, level: u8, keyword: u64) -> bool {
         #[cfg(target_os = "windows")]
         {
             unsafe { evntprov::EventProviderEnabled(self.handle, level, keyword) != 0 }
@@ -108,7 +144,7 @@ impl EventProvider {
         }
     }
 
-    pub fn is_event_enabled(&self, event_descriptor: &EventDescriptor) -> bool {
+    fn is_event_enabled(&self, event_descriptor: &EventDescriptor) -> bool {
         #[cfg(target_os = "windows")]
         {
             unsafe {
@@ -125,28 +161,114 @@ impl EventProvider {
     }
 }
 
-impl EventProvider {
-    pub fn new(provider_id: &GUID) -> Result<EventProvider, Error> {
+#[inline(never)]
+fn write_failed(error: u32) {
+    #[cfg(feature = "std")]
+    {
+        println!("EventWrite failed: {}", error);
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        let _ = error;
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod win_support {
+    pub use winapi::shared::evntprov;
+    pub use winapi::shared::evntrace;
+    pub use winapi::shared::winerror;
+
+    use super::*;
+
+    /// This data is stored in a Box, so that it has a stable address.
+    /// It is used to coordinate with ETW; ETW runs callbacks that need a stable pointer.
+    /// See `EventRegister` and the "enable callback".
+    pub(crate) struct StableProviderData {
+        pub(crate) max_level: AtomicU8,
+    }
+
+    /// See [PENABLECALLBACK](https://docs.microsoft.com/en-us/windows/win32/api/evntprov/nc-evntprov-penablecallback).
+    pub(crate) unsafe extern "system" fn enable_callback(
+        source_id: *const winapi::shared::guiddef::GUID,
+        is_enabled_code: u32,
+        level: u8,
+        match_any_keyword: u64,
+        match_all_keyword: u64,
+        filter_data: *mut evntprov::EVENT_FILTER_DESCRIPTOR,
+        context: *mut winapi::ctypes::c_void,
+    ) {
+        if source_id.is_null() {
+            eprintln!("enable_callback: source_id is null");
+            return;
+        }
+
+        // This should never happen.
+        if context.is_null() {
+            eprintln!("context is null, ignoring");
+            return;
+        }
+
+        let stable_data: &StableProviderData = &*(context as *const _ as *const StableProviderData);
+
+        let source_id: GUID = (*(source_id as *const GUID)).clone();
+        eprintln!(
+        "enable_callback: source_id {} is_enabled {}, level {}, any {:#x} all {:#x} filter? {:?}",
+        source_id, is_enabled_code, level, match_any_keyword, match_all_keyword,
+        !filter_data.is_null()
+    );
+
+        match is_enabled_code {
+            evntrace::EVENT_CONTROL_CODE_ENABLE_PROVIDER => {
+                eprintln!("ETW is ENABLING this provider.  setting level: {}", level);
+                stable_data.max_level.store(level, SeqCst);
+            }
+            evntrace::EVENT_CONTROL_CODE_DISABLE_PROVIDER => {
+                eprintln!("ETW is DISABLING this provider.  setting level: {}", level);
+                stable_data.max_level.store(level, SeqCst);
+            }
+            evntrace::EVENT_CONTROL_CODE_CAPTURE_STATE => {
+                // ETW is requesting that the provider log its state information. The meaning of this
+                // is provider-dependent. Currently, this functionality is not exposed to Rust apps.
+                eprintln!("EVENT_CONTROL_CODE_CAPTURE_STATE");
+            }
+            _ => {
+                // The control code is unrecognized.
+                eprintln!(
+                    "enable_callback: control code {} is not recognized",
+                    is_enabled_code
+                );
+            }
+        }
+    }
+}
+
+impl EtwProvider {
+    pub fn new(provider_id: &GUID) -> Result<EtwProvider, Error> {
         #[cfg(target_os = "windows")]
         {
             unsafe {
+                let mut stable = Box::pin(StableProviderData {
+                    max_level: AtomicU8::new(0),
+                });
                 let mut handle: evntprov::REGHANDLE = 0;
+                let stable_ptr: &mut StableProviderData = &mut *stable;
                 let error = evntprov::EventRegister(
                     provider_id as *const _ as *const winapi::shared::guiddef::GUID,
-                    None,
-                    null_mut(),
+                    Some(enable_callback),
+                    stable_ptr as *mut StableProviderData as *mut winapi::ctypes::c_void,
                     &mut handle,
                 );
                 if error != 0 {
                     Err(Error::WindowsError(error))
                 } else {
-                    Ok(EventProvider { handle })
+                    Ok(EtwProvider { handle, stable })
                 }
             }
         }
         #[cfg(not(target_os = "windows"))]
         {
-            Ok(EventProvider {})
+            Ok(EtwProvider {})
         }
     }
 
@@ -173,7 +295,7 @@ impl EventProvider {
     }
 }
 
-impl Drop for EventProvider {
+impl Drop for EtwProvider {
     fn drop(&mut self) {
         #[cfg(target_os = "windows")]
         {
@@ -184,7 +306,7 @@ impl Drop for EventProvider {
     }
 }
 
-unsafe impl Sync for EventProvider {}
+unsafe impl Sync for EtwProvider {}
 
 #[repr(C)]
 pub struct EventDescriptor {
@@ -197,6 +319,7 @@ pub struct EventDescriptor {
     pub keyword: u64,
 }
 
+#[inline(always)]
 pub fn with_activity<F: FnOnce() -> R, R>(f: F) -> R {
     #[cfg(target_os = "windows")]
     {

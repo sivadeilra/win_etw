@@ -167,36 +167,19 @@
 
 extern crate proc_macro;
 
+mod errors;
 mod well_known_types;
 
 use proc_macro2::TokenStream;
 use quote::{quote, quote_spanned};
 use std::iter::Extend;
 use syn::spanned::Spanned;
-use syn::{parse_macro_input, parse_quote, Error, Expr, ExprLit, FnArg, Ident, Lit, Token};
+use syn::{parse_quote, Error, Expr, ExprLit, FnArg, Ident, Lit, Token};
 use uuid::Uuid;
 use well_known_types::{WellKnownType, WellKnownTypes};
 
 #[cfg(test)]
 mod tests;
-
-macro_rules! parse_quote_2 {
-    (
-        $($t:tt)*
-    ) => {
-
-        {
-            let tokens: proc_macro2::TokenStream = quote!{ $($t)* };
-            match syn::parse2(tokens.clone()) {
-                Ok(value) => value,
-                Err(e) => {
-                    panic!("failed to parse:\n{}\nerror: {:?}", tokens, e);
-                }
-            }
-        }
-
-    }
-}
 
 /// Allows you to create ETW Trace Logging Providers. See the module docs for more detailed
 /// instructions for this macro.
@@ -205,49 +188,75 @@ pub fn trace_logging_events(
     attr: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    let logging_trait = parse_macro_input!(input as syn::ItemTrait);
-    let output = trace_logging_events_core(attr.into(), logging_trait);
+    // let logging_trait = parse_macro_input!(input as syn::ItemTrait);
+    let output = trace_logging_events_core(attr.into(), input.into());
     output.into()
 }
 
-fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -> TokenStream {
+fn trace_logging_events_core(attr: TokenStream, item_tokens: TokenStream) -> TokenStream {
     let mut errors: Vec<Error> = Vec::new();
 
-    // println!("parsing attributes: {:#?}", attr);
-    let provider_attrs: LoggingEventAttributes = match syn::parse2::<LoggingEventAttributes>(attr) {
-        Ok(p) => p,
+    let logging_trait: syn::ItemTrait = match syn::parse2(item_tokens) {
         Err(e) => {
-            // println!("failed to parse attributes: {:?}", e);
-            errors.push(e);
-            LoggingEventAttributes { uuid: Uuid::nil() }
+            return e.to_compile_error();
+        }
+        Ok(syn::Item::Trait(t)) => t,
+        Ok(syn::Item::Mod(m)) => {
+            return Error::new_spanned(&m, "Modules are not yet supported, but thanks for asking.")
+                .to_compile_error();
+        }
+        Ok(unrecognized) => {
+            return Error::new_spanned(
+                &unrecognized,
+                "The #[trace_logging_events] attribute cannot be used with this kind of item.",
+            )
+            .to_compile_error();
         }
     };
 
-    let provider_name = &logging_trait.ident;
-    let provider_name_string = provider_name.to_string();
+    let provider_attrs: ProviderAttributes = match syn::parse2(attr) {
+        Ok(p) => p,
+        Err(e) => {
+            errors.push(e);
+            ProviderAttributes::default()
+        }
+    };
+
+    // provider_ident is the identifier used in Rust source code for the generated provider type.
+    let provider_ident = &logging_trait.ident;
+    let provider_ident_string = provider_ident.to_string();
 
     let wk = WellKnownTypes::new();
-
-    // Create the provider metadata.
 
     let mut output = TokenStream::new();
 
     // provider_mod_ident is a module that we generate that contains implementation details.
     // It is not intended to be used directly by applications.
-    let provider_mod_ident: Ident = ident_suffix(provider_name, "implementation");
+    let provider_mod_ident: Ident = ident_suffix(provider_ident, "implementation");
 
     let mut event_descriptors: Vec<syn::Item> = Vec::new();
 
     let provider_metadata_ident = Ident::new(
-        &format!("{}_PROVIDER_METADATA", provider_name_string),
-        provider_name.span(),
+        &format!("{}_PROVIDER_METADATA", provider_ident_string),
+        provider_ident.span(),
     );
-    output.extend(create_provider_metadata(
-        &provider_name,
-        &provider_metadata_ident,
-    ));
 
-    let mut provider_impl_items: Vec<syn::ImplItem> = Vec::new();
+    // Create the provider metadata.
+    // provider_ident is the identifier used in Rust source code for the generated code.
+    // When writing the provider metadata, we allow the user to specify a different name to ETW.
+    {
+        let provider_name = provider_attrs
+            .provider_name
+            .as_ref()
+            .unwrap_or(&provider_ident_string);
+        output.extend(create_provider_metadata(
+            &provider_name,
+            &provider_metadata_ident,
+        ));
+    }
+
+    // Definitions that go inside the "impl MyProvider { ... }" block.
+    let mut provider_impl_items = TokenStream::new();
 
     for (method_index, method) in logging_trait
         .items
@@ -311,8 +320,7 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
         // For self-describing events (TraceLogging), the first two items in the data descriptor
         // array identify the provider metadata and the event metadata.
         let mut data_descriptor_array = TokenStream::new();
-        data_descriptor_array.extend(quote! {
-        });
+        data_descriptor_array.extend(quote! {});
 
         // See comments in traceloggingprovider.h, around line 2300, which describe the
         // encoding of the event mdata.
@@ -392,17 +400,13 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
         // We require that every function declare a '&self' receiver parameter.
         if !found_receiver {
             sig.inputs.insert(0, parse_quote!(&self));
-            /*
-            errors.push(Error::new_spanned(
-                &method.sig,
-                "The method is required to define a &self receiver parameter.",
-            ));
-            continue;
-            */
         }
 
         // Insert the "options" argument.
-        sig.inputs.insert(1, parse_quote!(options: core::option::Option<&::win_etw_provider::EventOptions>));
+        sig.inputs.insert(
+            1,
+            parse_quote!(options: core::option::Option<&::win_etw_provider::EventOptions>),
+        );
 
         // Now that we have processed all parameters ("fields"), we can finish constructing
         // the per-event metadata.
@@ -438,59 +442,7 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
             };
         });
 
-        // Build the method that implements this event.
-        let m = syn::ImplItemMethod {
-            attrs: event_attrs.method_attrs,
-            defaultness: None,
-            sig,
-            vis: parse_quote! { pub },
-            block: parse_quote_2! {
-                {
-                    #[cfg(target_os = "windows")]
-                    {
-                        use ::win_etw_provider::provider::EventDescriptor;
-                        use ::win_etw_provider::EventDataDescriptor;
-
-                        // This places the EVENT_METADATA into a read-only linker section, properly
-                        // ordered with respect to TRACE_LOGGING_METADATA and other related sections.
-                        #[link_section = ".rdata$etw1"]
-                        #[used]
-                        static EVENT_METADATA: [u8; #event_metadata_len] = [ #( #event_metadata, )* ];
-
-                        let mut event_descriptor: ::win_etw_provider::provider::EventDescriptor = ::win_etw_provider::provider::EventDescriptor {
-                            id: #event_id,
-                            version: 0,
-                            channel: 11,
-                            level: #event_level,
-                            opcode: #event_opcode,
-                            task: #event_task,
-                            keyword: 0,
-                        };
-
-                        if let Some(opts) = options {
-                            if let Some(level) = opts.level {
-                                event_descriptor.level = level;
-                            }
-                        }
-
-                        #statements
-
-                        let data_descriptors = [
-                            EventDataDescriptor::for_provider_metadata(&#provider_metadata_ident[..]),
-                            EventDataDescriptor::for_event_metadata(&EVENT_METADATA[..]),
-                            #data_descriptor_array
-                        ];
-                        self.provider.write(
-                            options,
-                            // &#provider_mod_ident::event_descriptors::#event_ident,
-                            &event_descriptor,
-                            &data_descriptors,
-                        );
-                    }
-                }
-            },
-        };
-        provider_impl_items.push(syn::ImplItem::Method(m));
+        let event_attrs_method_attrs = &event_attrs.method_attrs;
 
         // Generate the `${name}_is_enabled` function for this event.
         // We do not use ident_suffix() because this is not a private identifier.
@@ -498,60 +450,143 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
             &format!("{}_is_enabled", method.sig.ident.to_string()),
             method.sig.ident.span(),
         );
-        let event_enabled_method: syn::ImplItemMethod = parse_quote! {
+
+        // Build the method that implements this event.
+        provider_impl_items.extend(quote!{
+            #( #event_attrs_method_attrs )*
+            #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+            pub #sig
+            {
+                #[cfg(target_os = "windows")]
+                {
+                    use ::win_etw_provider::EventDataDescriptor;
+
+                    // This places the EVENT_METADATA into a read-only linker section, properly
+                    // ordered with respect to TRACE_LOGGING_METADATA and other related sections.
+                    #[link_section = ".rdata$etw1"]
+                    #[used]
+                    static EVENT_METADATA: [u8; #event_metadata_len] = [ #( #event_metadata, )* ];
+
+                    let mut event_descriptor: ::win_etw_provider::provider::EventDescriptor = ::win_etw_provider::provider::EventDescriptor {
+                        id: #event_id,
+                        version: 0,
+                        channel: 11,
+                        level: #event_level,
+                        opcode: #event_opcode,
+                        task: #event_task,
+                        keyword: 0,
+                    };
+
+                    if let Some(opts) = options {
+                        if let Some(level) = opts.level {
+                            event_descriptor.level = level;
+                        }
+                    }
+
+                    #statements
+
+                    let data_descriptors = [
+                        EventDataDescriptor::for_provider_metadata(&#provider_metadata_ident[..]),
+                        EventDataDescriptor::for_event_metadata(&EVENT_METADATA[..]),
+                        #data_descriptor_array
+                    ];
+                    ::win_etw_provider::provider::Provider::write(&self.provider,
+                        options,
+                        // &#provider_mod_ident::event_descriptors::#event_ident,
+                        &event_descriptor,
+                        &data_descriptors,
+                    );
+                }
+            }
+
             pub fn #event_is_enabled_name(&self) -> bool {
                 #[cfg(target_os = "windows")]
                 {
-                    self.provider.is_event_enabled(&#provider_mod_ident::event_descriptors::#event_ident)
+                    ::win_etw_provider::provider::Provider::is_event_enabled(
+                        &self.provider,
+                        &#provider_mod_ident::event_descriptors::#event_ident)
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
                     false
                 }
             }
-        };
-
-        provider_impl_items.push(syn::ImplItem::Method(event_enabled_method));
+        });
     }
 
     // We propagate the visibility of the trait definition to the structure definition.
     let vis = logging_trait.vis.clone();
     let provider_guid_const = uuid_to_expr(&provider_attrs.uuid);
 
+    // If the input item has doc attributes, then carry them over to the output type.
+    let doc_path: syn::Path = parse_quote!(doc);
+    let provider_attrs = logging_trait
+        .attrs
+        .iter()
+        .filter(|a| a.path == doc_path)
+        .collect::<Vec<_>>();
+
     output.extend(quote! {
-        // TODO: carry over doc comments
-        #vis struct #provider_name {
-            #[cfg(target_os = "windows")]
-            provider: ::win_etw_provider::provider::EventProvider,
+        #( #provider_attrs )*
+        #vis struct #provider_ident {
+            provider: ::core::option::Option<::win_etw_provider::provider::EtwProvider>,
         }
 
-        #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-        #[allow(non_snake_case)]
-        impl #provider_name {
-            #[allow(unused_variable)]
-            pub const PROVIDER_GUID: ::win_etw_provider::guid::GUID = #provider_guid_const;
+        impl #provider_ident {
+            /// Creates (registers) a new instance of this provider. If registration fails,
+            /// returns a "null" provider. This prevents problems with event logging from
+            /// disrupting the normal operation of applications.
+            ///
+            /// On non-Windows platforms, this function always returns a null provider.
+            ///
+            /// Creating an event source is a costly operation, because it requires contacting the
+            /// event manager, allocating event buffers, potentially receiving callbacks from
+            /// event consumers, etc. Applications should only create event sources during process
+            /// initialization, and should always reuse them, never re-creating them.
+            pub fn new() -> Self {
+                Self {
+                    provider: ::win_etw_provider::EtwProvider::new(&Self::PROVIDER_GUID).ok(),
+                }
+            }
 
-            pub fn new() -> core::result::Result<Self, ::win_etw_provider::Error> {
+            /// Creates (registers) a new instance of this provider. If registration fails, then
+            /// this method returns a "null" provider.
+            ///
+            /// On non-Windows platforms, this function always returns `Ok`, containing a null
+            /// provider.
+            ///
+            /// Creating an event source is a costly operation, because it requires contacting the
+            /// event manager, allocating event buffers, potentially receiving callbacks from
+            /// event consumers, etc. Applications should only create event sources during process
+            /// initialization, and should always reuse them, never re-creating them.
+            pub fn new_err() -> ::core::result::Result<Self, ::win_etw_provider::Error> {
                 Ok(Self {
-                    #[cfg(target_os = "windows")]
-                    provider: ::win_etw_provider::EventProvider::new(&Self::PROVIDER_GUID)?,
+                    provider: Some(::win_etw_provider::EtwProvider::new(&Self::PROVIDER_GUID)?),
                 })
             }
 
-            #(
-                #provider_impl_items
-            )*
+            /// Creates a new "null" instance of the provider. All events written to this provider
+            /// are discarded.
+            pub fn null() -> Self {
+                Self { provider: None }
+            }
+
+            #[allow(unused_variable)]
+            pub const PROVIDER_GUID: ::win_etw_provider::guid::GUID = #provider_guid_const;
+        }
+
+        // We intentionally generate identifiers that are not snake-case.
+        #[allow(non_snake_case)]
+        impl #provider_ident {
+            #provider_impl_items
         }
 
         #[doc(hidden)]
         #[allow(non_snake_case)]
         mod #provider_mod_ident {
-
             pub(crate) mod event_descriptors {
                 #![allow(non_upper_case_globals)]
-                #(
-                    #event_descriptors
-                )*
+                #( #event_descriptors )*
             }
         }
     });
@@ -564,9 +599,10 @@ fn err_spanned<T: quote::ToTokens>(item: &T, msg: &str) -> TokenStream {
     Error::new_spanned(item, msg).to_compile_error()
 }
 
-fn create_provider_metadata(provider_name: &Ident, provider_metadata_ident: &Ident) -> TokenStream {
+// `provider_name` is not necessarily the same as the identifier used in source code.
+// It can be overridden using `#[trace_logging_events(name = "some_name_here")]`.
+fn create_provider_metadata(provider_name: &str, provider_metadata_ident: &Ident) -> TokenStream {
     let mut provider_metadata: Vec<u8> = Vec::new();
-    let provider_name: String = provider_name.to_string();
 
     let provider_metadata_len = 2 + provider_name.len() + 1;
     if provider_metadata_len > 0xffff {
@@ -581,7 +617,7 @@ fn create_provider_metadata(provider_name: &Ident, provider_metadata_ident: &Ide
         #[link_section = ".rdata$etw2"]
         #[used]
         #[allow(non_upper_case_globals)]
-        #[cfg(target_os = "windows")]
+        // #[cfg(target_os = "windows")]
         static #provider_metadata_ident: [u8; #provider_metadata_len] = [
             #(
                 #provider_metadata,
@@ -930,59 +966,79 @@ fn parse_event_field(
     Ok(())
 }
 
-macro_rules! if_let_guard {
-    (
-        $p:pat = $e:expr => ($result:expr) else $return_expr:expr
-    ) => {
-        if let $p = $e {
-            $result
-        } else {
-            return $return_expr;
-        };
-    };
-}
+use errors::CombinedErrors;
 
 /// Represents the "attribute" parameter of the `#[trace_logging_events]` proc macro.
-struct LoggingEventAttributes {
+#[derive(Default, Debug)]
+struct ProviderAttributes {
     uuid: Uuid,
+    provider_name: Option<String>,
 }
 
-impl syn::parse::Parse for LoggingEventAttributes {
+impl syn::parse::Parse for ProviderAttributes {
     fn parse(stream: syn::parse::ParseStream) -> syn::Result<Self> {
+        let mut errors = CombinedErrors::default();
+
         let mut uuid_opt = None;
         let items: syn::punctuated::Punctuated<syn::Meta, Token![,]> =
             stream.parse_terminated(syn::Meta::parse)?;
 
+        let mut provider_name = None;
         for item in items.iter() {
-            match item {
-                syn::Meta::NameValue(syn::MetaNameValue { path, lit, .. }) => {
-                    if *path == parse_quote!(guid) {
-                        if uuid_opt.is_some() {
-                            return Err(Error::new_spanned(
-                                item,
-                                "The 'guid' attribute key cannot be specified more than once.",
-                            ));
+            errors.scope(item.span(), |scope| {
+                match item {
+                    syn::Meta::NameValue(syn::MetaNameValue { path, lit, .. }) => {
+                        if *path == parse_quote!(guid) {
+                            let s = if let syn::Lit::Str(s) = lit {
+                                s
+                            } else {
+                                scope.msg(
+                                    "The attribute value is required to be a GUID in string form.",
+                                );
+                                return Ok(());
+                            };
+
+                            let guid_str = s.value();
+                            let uuid = if let Ok(value) = guid_str.parse::<Uuid>() {
+                                if value == Uuid::nil() {
+                                    scope.msg("The GUID cannot be the NIL (all-zeroes) GUID.");
+                                }
+                                value
+                            } else {
+                                scope.msg("The attribute value is required to be a valid GUID.");
+                                Uuid::nil()
+                            };
+                            if uuid_opt.is_some() {
+                                scope.msg(
+                                    "The 'guid' attribute key cannot be specified more than once.",
+                                );
+                            } else {
+                                uuid_opt = Some(uuid);
+                            }
+                        } else if *path == parse_quote!(name) {
+                            if let syn::Lit::Str(s) = lit {
+                                if provider_name.is_none() {
+                                    provider_name = Some(s.value());
+                                } else {
+                                    scope.msg("The 'name' attribute can only be specified once.");
+                                }
+                            } else {
+                                scope.msg("The 'name' attribute key requires a string value.");
+                            }
+                        } else {
+                            scope.msg("Unrecognized attribute key.");
                         }
-                        let s = if_let_guard!(syn::Lit::Str(s) = lit => (s)
-                            else Err(Error::new_spanned(lit, "The attribute value is required to be a GUID in string form.")));
-
-                        let guid_str = s.value();
-                        let uuid = if_let_guard!(Ok(s) = guid_str.parse::<Uuid>() => (s)
-                            else Err(Error::new_spanned(lit, "The attribute value is required to be a valid GUID.")));
-
-                        if uuid == Uuid::nil() {
-                            return Err(Error::new_spanned(lit, "The GUID is required to be valid; the all-zeroes pattern is not valid."));
-                        }
-
-                        uuid_opt = Some(uuid);
-                    } else {
-                        return Err(Error::new_spanned(item, "Unrecognized key name"));
+                    }
+                    syn::Meta::Path(path) if *path == parse_quote!(static_mode) => {
+                        // eprintln!("Found 'static'");
+                    }
+                    _ => {
+                        // eprintln!("item: {:#?}", item);
+                        scope.msg("Unrecognized attribute item.");
                     }
                 }
-                _ => {
-                    return Err(Error::new_spanned(item, "Unrecognized attributes"));
-                }
-            }
+                Ok(())
+            });
         }
 
         // TODO: We could generate a deterministic GUID by hashing the event provider name or the
@@ -991,16 +1047,23 @@ impl syn::parse::Parse for LoggingEventAttributes {
         //
         // I considered generating a GUID and printing it in the error message, but I decided not
         // to do that because it introduces non-determinism.
-        let uuid = if_let_guard!(Some(provider_uuid) = uuid_opt => (provider_uuid) else {
-            Err(Error::new_spanned(&items,
+        let uuid = if let Some(provider_uuid) = uuid_opt {
+            provider_uuid
+        } else {
+            errors.push(Error::new_spanned(
+                &items,
                 "The 'guid' attribute is required.
 Please generate a GUID that uniquely identfies this event provider.
 Do not use the same GUID for different event providers.
-Example: #[trace_logging_events(guid = \"123e4567-e89b...\")]"
-            ))
-        });
+Example: #[trace_logging_events(guid = \"123e4567-e89b...\")]",
+            ));
+            Uuid::nil()
+        };
 
-        Ok(LoggingEventAttributes { uuid })
+        errors.to_result(ProviderAttributes {
+            uuid,
+            provider_name,
+        })
     }
 }
 
@@ -1058,6 +1121,7 @@ fn parse_event_attributes(
     let mut method_attrs: Vec<syn::Attribute> = Vec::new();
 
     let mut event_already_has_doc = false;
+    let enable_default_event_doc = false;
 
     for attr in input_method_attrs.iter() {
         if attr.path == parse_quote!(doc) {
@@ -1157,7 +1221,7 @@ fn parse_event_attributes(
         }
     }
 
-    if !event_already_has_doc {
+    if !event_already_has_doc && enable_default_event_doc {
         let method_doc = format!(
             "Writes the `{}` event to the ETW log stream.",
             method_ident.to_string()

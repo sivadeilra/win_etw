@@ -15,3 +15,6 @@ syn = { version = "1.0.18", features = ["full", "extra-traits"] }
 quote = "1.0.3"
 win_etw_metadata = { path = "../win_etw_metadata" }
 uuid = { version = "0.8.1" }
+
+[dev-dependencies]
+win_etw_provider = { path = "../win_etw_provider" }

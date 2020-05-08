@@ -50,8 +50,7 @@ impl syn::parse::Parse for CompileErrors {
 }
 
 fn test_worker(attrs: TokenStream, input: TokenStream, expected_errors: &[&'static str]) {
-    let input_trait: syn::ItemTrait = syn::parse2(input).unwrap();
-    let output = trace_logging_events_core(attrs, input_trait);
+    let output = trace_logging_events_core(attrs, input);
 
     // Scan 'output' for errors.
     let errors: CompileErrors = syn::parse2(output).unwrap();
@@ -332,57 +331,6 @@ test_case! {
 
 test_case! {
     #[test]
-    fn test_bad_guid();
-    input: {
-        #[trace_logging_events(guid = "bad guid")]
-        trait Events {}
-    }
-    expected_errors: [
-        "The attribute value is required to be a valid GUID.",
-    ]
-}
-
-test_case! {
-    #[test]
-    fn test_nil_guid();
-    input: {
-        #[trace_logging_events(guid = "00000000-0000-0000-0000-000000000000")]
-        trait Events {}
-    }
-    expected_errors: [
-        "The GUID is required to be valid; the all-zeroes pattern is not valid.",
-    ]
-}
-
-test_case! {
-    #[test]
-    fn test_dup_guid();
-    input: {
-        #[trace_logging_events(
-            guid = "610259b8-9270-46f2-ad94-2f805721b287",
-            guid = "610259b8-9270-46f2-ad94-2f805721b287"
-        )]
-        trait Events {}
-    }
-    expected_errors: [
-        "The 'guid' attribute key cannot be specified more than once.",
-    ]
-}
-
-test_case! {
-    #[test]
-    fn test_invalid_provider_attributes();
-    input: {
-        #[trace_logging_events(bad_name = "bad_value")]
-        trait Events {}
-    }
-    expected_errors: [
-        "Unrecognized key name",
-    ]
-}
-
-test_case! {
-    #[test]
     fn test_invalid_event_attributes();
     input: {
         #[trace_logging_events()]
@@ -409,4 +357,109 @@ test_case! {
     expected_errors: [
         "The only attributes allowed on event methods are #[doc] and #[event(...)] attributes.",
     ]
+}
+
+test_case! {
+    #[test]
+    fn wrong_item_kind();
+    input: {
+        #[trace_logging_events()]
+        fn wrong_item_kind() {}
+    }
+    expected_errors: [
+        "The #[trace_logging_events] attribute cannot be used with this kind of item.",
+    ]
+}
+
+use quote::quote;
+
+fn test_provider_attributes_error(input: TokenStream, expected_errors: &[&str]) {
+    match syn::parse2::<ProviderAttributes>(input) {
+        Ok(parsed) => {
+            panic!("Expected parsing of input to fail.  Output: {:?}", parsed);
+        }
+        Err(combined_error) => {
+            check_errors(&combined_error, expected_errors);
+        }
+    }
+}
+
+#[test]
+fn provider_attributes_invalid_meta() {
+    // We do not check the error details for this, because they are not under our control.
+    // This is a failure to parse the comma-separated syn::Meta list.
+    let result = syn::parse2::<ProviderAttributes>(quote! { bad bad bad });
+    assert!(result.is_err());
+}
+
+#[test]
+fn provider_attributes_unrecognized_key() {
+    test_provider_attributes_error(
+        quote!(bad_name = "bad_value"),
+        &["Unrecognized attribute key."],
+    );
+}
+
+#[test]
+fn provider_attributes_missing_guid() {
+    test_provider_attributes_error(quote!(), &["The \'guid\' attribute is required."]);
+}
+
+#[test]
+fn provider_attributes_nil_guid() {
+    test_provider_attributes_error(
+        quote!(guid = "00000000-0000-0000-0000-000000000000"),
+        &["The GUID cannot be the NIL (all-zeroes) GUID."],
+    );
+}
+
+#[test]
+fn provider_attributes_invalid_guid() {
+    test_provider_attributes_error(
+        quote!(guid = "xxx"),
+        &["The attribute value is required to be a valid GUID."],
+    );
+}
+
+#[test]
+fn provider_attributes_dup_guid() {
+    test_provider_attributes_error(
+        quote!(
+            guid = "610259b8-9270-46f2-ad94-2f805721b287",
+            guid = "610259b8-9270-46f2-ad94-2f805721b287"
+        ),
+        &["The 'guid' attribute key cannot be specified more than once."],
+    );
+}
+
+#[test]
+fn provider_attributes_valid() {
+    let result = syn::parse2::<ProviderAttributes>(quote! {
+        guid = "610259b8-9270-46f2-ad94-2f805721b287"
+    });
+    assert!(result.is_ok(), "Result: {:?}", result);
+}
+
+#[test]
+fn provider_attributes_valid_static() {
+    let result = syn::parse2::<ProviderAttributes>(quote! {
+        guid = "610259b8-9270-46f2-ad94-2f805721b287", static_mode
+    });
+    assert!(result.is_ok(), "Result: {:?}", result);
+}
+
+fn check_errors(error: &Error, expected_errors: &[&str]) {
+    let error_strings: Vec<String> = error.into_iter().map(|e| format!("{}", e)).collect();
+    for expected_error in expected_errors.iter() {
+        if error_strings.iter().any(|e| e.contains(expected_error)) {
+            // good
+        } else {
+            eprintln!("\nDid not find this error in list: {:?}", expected_error);
+            eprintln!("Actual errors:");
+            for e in error_strings.iter() {
+                eprintln!("    {:?}", e);
+            }
+            panic!("Error strings did not match.");
+        }
+    }
 }

@@ -37,13 +37,38 @@ macro_rules! guid {
 }
 
 #[repr(C)]
-#[derive(Default)]
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
+#[derive(Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct GUID {
     pub data1: u32,
     pub data2: u16,
     pub data3: u16,
     pub data4: [u8; 8],
+}
+
+impl core::fmt::Display for GUID {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            fmt,
+            "{:08x}-{:04x}-{:04x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            self.data1,
+            self.data2,
+            self.data3,
+            self.data4[0],
+            self.data4[1],
+            self.data4[2],
+            self.data4[3],
+            self.data4[4],
+            self.data4[5],
+            self.data4[6],
+            self.data4[7]
+        )
+    }
+}
+
+impl core::fmt::Debug for GUID {
+    fn fmt(&self, fmt: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, fmt)
+    }
 }
 
 #[cfg(target_os = "windows")]

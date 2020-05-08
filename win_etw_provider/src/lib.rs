@@ -3,7 +3,6 @@
 //! See [About Event Tracing](https://docs.microsoft.com/en-us/windows/win32/etw/about-event-tracing).
 
 #![cfg_attr(all(not(test), not(feature = "std")), no_std)]
-
 #![cfg_attr(not(windows), allow(unused))]
 
 pub mod guid;

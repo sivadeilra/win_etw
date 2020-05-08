@@ -1,7 +1,7 @@
 #![allow(clippy::unreadable_literal)]
 #![forbid(unsafe_code)]
 
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use win_etw_provider::types::FILETIME;
 use win_etw_provider::{guid, guid::GUID};
 
@@ -22,7 +22,7 @@ const PROVIDER_GUID: GUID =
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 fn main() {
-    let hello_provider = HelloWorldProvider::new().unwrap();
+    let hello_provider = HelloWorldProvider::new();
 
     hello_provider.arg_str(None, "Hello, world!");
     hello_provider.arg_slice_u8(None, &[44, 55, 66]);
@@ -42,9 +42,10 @@ fn main() {
     hello_provider.something_bad_happened(None, "uh oh!");
 
     hello_provider.file_created(None, SystemTime::now());
-    hello_provider.file_created_filetime(None, FILETIME(
-        (11644473600 + (3 * 365 + 31 + 28 + 31 + 30 + 31 + 15) * 86400) * 10_000_000,
-    ));
+    hello_provider.file_created_filetime(
+        None,
+        FILETIME((11644473600 + (3 * 365 + 31 + 28 + 31 + 30 + 31 + 15) * 86400) * 10_000_000),
+    );
 
     hello_provider.arg_u32_hex(None, 0xcafef00d);
 
@@ -54,12 +55,23 @@ fn main() {
         hello_provider.arg_ntstatus(None, ntstatus::STATUS_DEVICE_REQUIRES_CLEANING as u32);
         hello_provider.arg_win32error(None, winerror::ERROR_OUT_OF_PAPER);
     }
+
+    let args = std::env::args().collect::<Vec<String>>();
+    if args.len() >= 2 && args[1] == "loop" {
+        eprintln!("looping");
+        loop {
+            std::thread::sleep(Duration::from_millis(3000));
+            hello_provider.hello(None, "Looping...  (from Rust)");
+        }
+    }
 }
 
 use win_etw_macros::trace_logging_events;
 
+/// Hello, World, from ETW
 #[trace_logging_events(guid = "861A3948-3B6B-4DDF-B862-B2CB361E238E")]
 trait HelloWorldProvider {
+    fn hello(a: &str);
     fn arg_i32(a: i32);
     fn arg_u8(a: u8);
 
@@ -171,4 +183,10 @@ trait TestManyEvents {
     fn arg_hresult(a: HRESULT);
     fn arg_ntstatus(a: NTSTATUS);
     fn arg_win32error(a: WIN32ERROR);
+}
+
+#[cfg(WIP)]
+#[trace_logging_events(guid = "861A3948-3B6B-4DDF-B862-B2CB361E238E")]
+mod hello_world_events {
+    fn arg_foo() {}
 }
