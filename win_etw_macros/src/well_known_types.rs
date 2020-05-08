@@ -106,14 +106,23 @@ well_known_types! {
         }),
         can_output_hex: true,
     }
-    str: str => { is_ref: false, primitive: false, in_type: InFlag::COUNTED_ANSI_STRING,
-        out_type: Some(OutFlag::UTF8),
-    }
     ref_str: &str => {
         is_ref: true,
         primitive: false,
         in_type: InFlag::COUNTED_ANSI_STRING,
         out_type: Some(OutFlag::UTF8),
+    }
+    u16cstr: &U16CStr => {
+        is_ref: true,
+        primitive: false,
+        in_type: InFlag::COUNTED_UNICODE_STRING,
+        replacement_type: Some(parse_quote!(&::widestring::U16CStr)),
+    }
+    osstr: &OsStr => {
+        is_ref: true,
+        primitive: false,
+        in_type: InFlag::COUNTED_UNICODE_STRING,
+        replacement_type: Some(parse_quote!(&::std::ffi::OsStr)),
     }
     guid: &GUID => {
         is_ref: true, primitive: false,
@@ -145,7 +154,7 @@ well_known_types! {
         is_ref: false,
         primitive: false,
         in_type: InFlag::FILETIME,
-        replacement_type: Some(parse_quote!{ ::std::time::SystemTime }),
+        replacement_type: Some(parse_quote!(::std::time::SystemTime)),
     }
     FILETIME: FILETIME => {
         is_ref: true,

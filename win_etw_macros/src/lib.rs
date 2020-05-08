@@ -175,27 +175,31 @@ use std::iter::Extend;
 use syn::spanned::Spanned;
 use syn::{parse_macro_input, parse_quote, Error, Expr, ExprLit, FnArg, Ident, Lit, Token};
 use uuid::Uuid;
-use well_known_types::{WellKnownTypes, WellKnownType};
+use well_known_types::{WellKnownType, WellKnownTypes};
 
 #[cfg(test)]
 mod tests;
 
-/// Allows you to create ETW Trace Logging Providers.
-///
-/// You can use this macro to define a Trace Logging Provider. See the module docs for more detailed
+macro_rules! parse_quote_2 {
+    (
+        $($t:tt)*
+    ) => {
+
+        {
+            let tokens: proc_macro2::TokenStream = quote!{ $($t)* };
+            match syn::parse2(tokens.clone()) {
+                Ok(value) => value,
+                Err(e) => {
+                    panic!("failed to parse:\n{}\nerror: {:?}", tokens, e);
+                }
+            }
+        }
+
+    }
+}
+
+/// Allows you to create ETW Trace Logging Providers. See the module docs for more detailed
 /// instructions for this macro.
-///
-/// ```ignore
-/// use win_etw_macros::trace_logging_events;
-///
-/// #[trace_logging_events(guid = "... your guid here ...")]
-/// pub trait MyAppEvents {
-///     fn user_connected(&self, user_id: &str, client_address: &SockAddr);
-///     fn channel_created(&self, owner: &str, channel: &str);
-///     fn message_sent(&self, sender: &str, channel: &str, message: &str);
-///     fn user_disconnected(&self, user_id: &str);
-/// }
-/// ```
 #[proc_macro_attribute]
 pub fn trace_logging_events(
     attr: proc_macro::TokenStream,
@@ -228,6 +232,12 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
 
     let mut output = TokenStream::new();
 
+    // provider_mod_ident is a module that we generate that contains implementation details.
+    // It is not intended to be used directly by applications.
+    let provider_mod_ident: Ident = ident_suffix(provider_name, "implementation");
+
+    let mut event_descriptors: Vec<syn::Item> = Vec::new();
+
     let provider_metadata_ident = Ident::new(
         &format!("{}_PROVIDER_METADATA", provider_name_string),
         provider_name.span(),
@@ -237,12 +247,7 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
         &provider_metadata_ident,
     ));
 
-    let mut output_impl: syn::ItemImpl = parse_quote! {
-        #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
-        impl #provider_name {
-            // We will add method bodies, below.
-        }
-    };
+    let mut provider_impl_items: Vec<syn::ImplItem> = Vec::new();
 
     for (method_index, method) in logging_trait
         .items
@@ -295,6 +300,7 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
             ));
         }
 
+        let event_ident = &method.sig.ident;
         let event_name: String = method.sig.ident.to_string();
 
         // Here we build the data descriptor array. The data descriptor array is constructed on
@@ -306,8 +312,6 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
         // array identify the provider metadata and the event metadata.
         let mut data_descriptor_array = TokenStream::new();
         data_descriptor_array.extend(quote! {
-            EventDataDescriptor::for_provider_metadata(&#provider_metadata_ident[..]),
-            EventDataDescriptor::for_event_metadata(&EVENT_METADATA[..]),
         });
 
         // See comments in traceloggingprovider.h, around line 2300, which describe the
@@ -331,21 +335,9 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
         for param in sig.inputs.iter_mut() {
             let param_span = param.span();
             match param {
-                FnArg::Receiver(syn::Receiver {
-                    mutability: None,
-                    reference: Some((_, None)),
-                    ..
-                }) => {
-                    found_receiver = true;
-                    continue;
-                }
                 FnArg::Receiver(_) => {
+                    errors.push(Error::new_spanned(param, "Event methods should not provide any receiver arguments (&self, &mut self, etc.)."));
                     found_receiver = true;
-                    errors.push(Error::new_spanned(
-                        &param,
-                        "The receiver (self) parameter is required to be &self. \
-                         No other variants are supported.",
-                    ));
                 }
 
                 FnArg::Typed(param_typed) => {
@@ -399,12 +391,18 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
 
         // We require that every function declare a '&self' receiver parameter.
         if !found_receiver {
+            sig.inputs.insert(0, parse_quote!(&self));
+            /*
             errors.push(Error::new_spanned(
                 &method.sig,
                 "The method is required to define a &self receiver parameter.",
             ));
             continue;
+            */
         }
+
+        // Insert the "options" argument.
+        sig.inputs.insert(1, parse_quote!(options: core::option::Option<&::win_etw_provider::EventOptions>));
 
         // Now that we have processed all parameters ("fields"), we can finish constructing
         // the per-event metadata.
@@ -423,25 +421,35 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
 
         let event_attrs = parse_event_attributes(&mut errors, &method.sig.ident, &method.attrs);
 
-        // Build the method that implements this event.
+        // Generate the event descriptor for this event.
+        // This is a static variable. The name is exactly the name of the event.
         let event_level = event_attrs.level;
         let event_opcode = event_attrs.opcode;
         let event_task = event_attrs.task;
+        event_descriptors.push(parse_quote!{
+            pub(crate) static #event_ident: ::win_etw_provider::provider::EventDescriptor = ::win_etw_provider::provider::EventDescriptor {
+                id: #event_id,
+                version: 0,
+                channel: 11,
+                level: #event_level,
+                opcode: #event_opcode,
+                task: #event_task,
+                keyword: 0,
+            };
+        });
+
+        // Build the method that implements this event.
         let m = syn::ImplItemMethod {
             attrs: event_attrs.method_attrs,
             defaultness: None,
             sig,
             vis: parse_quote! { pub },
-            block: syn::parse2(quote! {
+            block: parse_quote_2! {
                 {
                     #[cfg(target_os = "windows")]
                     {
                         use ::win_etw_provider::provider::EventDescriptor;
                         use ::win_etw_provider::EventDataDescriptor;
-
-                        const EVENT_LEVEL: u8 = #event_level;
-                        const EVENT_OPCODE: u8 = #event_opcode;
-                        const EVENT_TASK: u16 = #event_task;
 
                         // This places the EVENT_METADATA into a read-only linker section, properly
                         // ordered with respect to TRACE_LOGGING_METADATA and other related sections.
@@ -449,53 +457,103 @@ fn trace_logging_events_core(attr: TokenStream, logging_trait: syn::ItemTrait) -
                         #[used]
                         static EVENT_METADATA: [u8; #event_metadata_len] = [ #( #event_metadata, )* ];
 
-                        static EVENT_DESCRIPTOR: EventDescriptor = EventDescriptor {
+                        let mut event_descriptor: ::win_etw_provider::provider::EventDescriptor = ::win_etw_provider::provider::EventDescriptor {
                             id: #event_id,
                             version: 0,
                             channel: 11,
-                            level: EVENT_LEVEL,
-                            opcode: EVENT_OPCODE,
-                            task: EVENT_TASK,
+                            level: #event_level,
+                            opcode: #event_opcode,
+                            task: #event_task,
                             keyword: 0,
                         };
+
+                        if let Some(opts) = options {
+                            if let Some(level) = opts.level {
+                                event_descriptor.level = level;
+                            }
+                        }
 
                         #statements
 
                         let data_descriptors = [
+                            EventDataDescriptor::for_provider_metadata(&#provider_metadata_ident[..]),
+                            EventDataDescriptor::for_event_metadata(&EVENT_METADATA[..]),
                             #data_descriptor_array
                         ];
-                        self.provider.write(&EVENT_DESCRIPTOR, &data_descriptors);
+                        self.provider.write(
+                            options,
+                            // &#provider_mod_ident::event_descriptors::#event_ident,
+                            &event_descriptor,
+                            &data_descriptors,
+                        );
                     }
                 }
-            })
-            .unwrap(),
+            },
+        };
+        provider_impl_items.push(syn::ImplItem::Method(m));
+
+        // Generate the `${name}_is_enabled` function for this event.
+        // We do not use ident_suffix() because this is not a private identifier.
+        let event_is_enabled_name = Ident::new(
+            &format!("{}_is_enabled", method.sig.ident.to_string()),
+            method.sig.ident.span(),
+        );
+        let event_enabled_method: syn::ImplItemMethod = parse_quote! {
+            pub fn #event_is_enabled_name(&self) -> bool {
+                #[cfg(target_os = "windows")]
+                {
+                    self.provider.is_event_enabled(&#provider_mod_ident::event_descriptors::#event_ident)
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    false
+                }
+            }
         };
 
-        output_impl.items.push(syn::ImplItem::Method(m));
+        provider_impl_items.push(syn::ImplItem::Method(event_enabled_method));
     }
-
-    let provider_guid_const = uuid_to_expr(&provider_attrs.uuid);
-    output_impl.items.push(parse_quote! {
-        #[allow(unused_variable)]
-        pub const PROVIDER_GUID: ::win_etw_provider::guid::GUID = #provider_guid_const;
-    });
-    output_impl.items.push(
-        parse_quote! {pub fn new() -> core::result::Result<Self, ::win_etw_provider::Error> {
-            Ok(Self {
-                #[cfg(target_os = "windows")]
-                provider: ::win_etw_provider::EventProvider::new(&Self::PROVIDER_GUID)?,
-            })
-        }},
-    );
 
     // We propagate the visibility of the trait definition to the structure definition.
     let vis = logging_trait.vis.clone();
+    let provider_guid_const = uuid_to_expr(&provider_attrs.uuid);
+
     output.extend(quote! {
+        // TODO: carry over doc comments
         #vis struct #provider_name {
             #[cfg(target_os = "windows")]
             provider: ::win_etw_provider::provider::EventProvider,
         }
-        #output_impl
+
+        #[cfg_attr(not(target_os = "windows"), allow(unused_variables))]
+        #[allow(non_snake_case)]
+        impl #provider_name {
+            #[allow(unused_variable)]
+            pub const PROVIDER_GUID: ::win_etw_provider::guid::GUID = #provider_guid_const;
+
+            pub fn new() -> core::result::Result<Self, ::win_etw_provider::Error> {
+                Ok(Self {
+                    #[cfg(target_os = "windows")]
+                    provider: ::win_etw_provider::EventProvider::new(&Self::PROVIDER_GUID)?,
+                })
+            }
+
+            #(
+                #provider_impl_items
+            )*
+        }
+
+        #[doc(hidden)]
+        #[allow(non_snake_case)]
+        mod #provider_mod_ident {
+
+            pub(crate) mod event_descriptors {
+                #![allow(non_upper_case_globals)]
+                #(
+                    #event_descriptors
+                )*
+            }
+        }
     });
 
     output.extend(errors.into_iter().map(|e| e.to_compile_error()));
@@ -657,34 +715,67 @@ fn parse_event_field(
                 // We encode &str as COUNTEDANSISTRING (so that we do not need
                 // a NUL-terminated string) and marking its output type as UTF-8.
                 // This uses two EVENT_DATA_DESCRIPTOR slots.
-                let field_len_ident = Ident::new(
-                    &format!("{}_len_u16", field_name.to_string()),
-                    field_name.span(),
-                );
+                let field_len = ident_suffix(field_name, "len");
                 statements.extend(quote_spanned! {
                     field_span =>
-                    let #field_len_ident: u16 = #field_name.len() as u16;
+                    let #field_len: u16 = #field_name.len() as u16;
                 });
                 data_descriptor_array.extend(quote! {
-                    EventDataDescriptor::from(&#field_len_ident),
+                    EventDataDescriptor::from(&#field_len),
                     EventDataDescriptor::from(#field_name),
+                });
+            }
+            WellKnownType::u16cstr => {
+                let field_len = ident_suffix(field_name, "len");
+                statements.extend(quote! {
+                    let #field_len: usize = #field_name.len(); // length in code units
+                    let #field_len: u16 = #field_len.min(0xffff) as u16;
+                });
+                data_descriptor_array.extend(quote! {
+                    EventDataDescriptor::from(&#field_len),
+                    EventDataDescriptor::from(#field_name),
+                });
+            }
+            WellKnownType::osstr => {
+                let field_len = ident_suffix(field_name, "len");
+                let field_desc = ident_suffix(field_name, "desc");
+                let field_u16cstring = ident_suffix(field_name, "u16cstring");
+                let field_u16cstr = ident_suffix(field_name, "u16cstr");
+                statements.extend(quote! {
+                    let #field_desc: EventDataDescriptor;
+                    let #field_len: u16;
+                    let #field_u16cstring: ::widestring::U16CString;
+                    let #field_u16cstr: &::widestring::U16CStr;
+                    match ::widestring::U16CString::from_os_str(#field_name) {
+                        Ok(s) => {
+                            #field_u16cstring = s;
+                            #field_u16cstr = #field_u16cstring.as_ref();
+                            #field_desc = EventDataDescriptor::from(#field_u16cstr);
+                            #field_len = #field_u16cstr.len() as u16; // length in UTF-16 code units, not bytes
+                        }
+                        Err(_) => {
+                            #field_desc = EventDataDescriptor::empty();
+                            #field_len = 0;
+                        }
+                    }
+                });
+                data_descriptor_array.extend(quote! {
+                    EventDataDescriptor::from(&#field_len),
+                    #field_desc,
                 });
             }
             WellKnownType::SocketAddrV4 => {
                 // We cannot simply pass a copy of std::net::SocketAddrV4 to ETW because it does
                 // not have a guaranteed memory layout. So we convert it to
                 // win_etw_provider::types::SocketAddrV4, which does.
-                let field_len_ident = Ident::new(
-                    &format!("{}_len_u16", field_name.to_string()),
-                    field_name.span(),
-                );
+                let field_len = ident_suffix(field_name, "len");
                 statements.extend(quote_spanned! {
                     field_span =>
                     let #field_name = ::win_etw_provider::types::SocketAddrV4::from(#field_name);
-                    let #field_len_ident: u16 = (::core::mem::size_of::<::win_etw_provider::types::SocketAddrV4>()) as u16;
+                    let #field_len: u16 = (::core::mem::size_of::<::win_etw_provider::types::SocketAddrV4>()) as u16;
                 });
                 data_descriptor_array.extend(quote! {
-                    EventDataDescriptor::from(&#field_len_ident),
+                    EventDataDescriptor::from(&#field_len),
                     EventDataDescriptor::from(&#field_name),
                 });
             }
@@ -692,34 +783,23 @@ fn parse_event_field(
                 // We cannot simply pass a copy of std::net::SocketAddrV6 to ETW because it does
                 // not have a guaranteed memory layout. So we convert it to
                 // win_etw_provider::types::SocketAddrV6, which does.
-                let field_len_ident = Ident::new(
-                    &format!("{}_len_u16", field_name.to_string()),
-                    field_name.span(),
-                );
+                let field_len = ident_suffix(field_name, "len");
                 statements.extend(quote_spanned! {
                     field_span =>
                     let #field_name = ::win_etw_provider::types::SocketAddrV6::from(#field_name);
-                    let #field_len_ident: u16 = (::core::mem::size_of::<::win_etw_provider::types::SocketAddrV6>()) as u16;
+                    let #field_len: u16 = (::core::mem::size_of::<::win_etw_provider::types::SocketAddrV6>()) as u16;
                 });
                 data_descriptor_array.extend(quote_spanned! {
                     field_span =>
-                    EventDataDescriptor::from(&#field_len_ident),
+                    EventDataDescriptor::from(&#field_len),
                     EventDataDescriptor::from(&#field_name),
                 });
             }
             WellKnownType::SocketAddr => {
-                let field_desc = Ident::new(
-                    &format!("{}_desc", field_name.to_string()),
-                    field_name.span(),
-                );
-                let field_v4 =
-                    Ident::new(&format!("{}_v4", field_name.to_string()), field_name.span());
-                let field_v6 =
-                    Ident::new(&format!("{}_v6", field_name.to_string()), field_name.span());
-                let field_len_ident = Ident::new(
-                    &format!("{}_len_u16", field_name.to_string()),
-                    field_name.span(),
-                );
+                let field_desc = ident_suffix(field_name, "desc");
+                let field_v4 = ident_suffix(field_name, "v4");
+                let field_v6 = ident_suffix(field_name, "v6");
+                let field_len_ident = ident_suffix(field_name, "len");
                 statements.extend(quote_spanned! {
                     field_span =>
                     let #field_v4;
@@ -802,10 +882,7 @@ fn parse_event_field(
                             }
                             // Slices are encoded using two data descriptors.
                             // The first is for the length field, the second for the data.
-                            let field_len_ident = Ident::new(
-                                &format!("{}_len_u16", field_name.to_string()),
-                                field_name.span(),
-                            );
+                            let field_len_ident = ident_suffix(field_name, "len");
                             statements.extend(quote_spanned! {
                                 field_span =>
                                 let #field_name = &#field_name[..#field_name.len().min(0xffff)];
@@ -1094,4 +1171,23 @@ fn parse_event_attributes(
         opcode,
         task,
     }
+}
+
+/// The separator we use to build dynamic identifiers, based on existing identifiers.
+/// Ideally, we would use a string that will not cause collisions with user-provided
+/// identifiers. Rust supports non-ASCII identifiers, which would allow us to
+/// use something like `U+0394 GREEK CAPITAL LETTER DELTA`, but this is an unstable
+/// feature.
+///
+/// Instead, we use "__". Idiomatic identifiers should not contain "__" because this
+/// does not meet Rust's definition of a snake-case name. So we add use this, and add
+/// `#[allow(non_snake_case)]` to our generated code.
+const IDENT_SEPARATOR: &str = "__";
+
+/// Builds a new identifier, based on an existing identifier.
+fn ident_suffix(ident: &Ident, suffix: &str) -> Ident {
+    Ident::new(
+        &format!("{}{}{}", ident.to_string(), IDENT_SEPARATOR, suffix),
+        ident.span(),
+    )
 }

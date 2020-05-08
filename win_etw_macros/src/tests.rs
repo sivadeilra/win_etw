@@ -113,65 +113,67 @@ test_case! {
     input: {
         #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
-            fn arg_bool(&self, a: bool);
-            fn arg_u8(&self, a: u8);
-            fn arg_u16(&self, a: u16);
-            fn arg_u32(&self, a: u32);
-            fn arg_u64(&self, a: u64);
-            fn arg_i8(&self, a: i8);
-            fn arg_i16(&self, a: i16);
-            fn arg_i32(&self, a: i32);
-            fn arg_i64(&self, a: i64);
-            fn arg_f32(&self, a: f32);
-            fn arg_f64(&self, a: f64);
-            fn arg_usize(&self, a: usize);
-            fn arg_isize(&self, a: isize);
+            fn arg_none();
 
-            // fn arg_slice_bool(&self, a: &[bool]);
-            fn arg_slice_u8(&self, a: &[u8]);
-            fn arg_slice_u16(&self, a: &[u16]);
-            fn arg_slice_u32(&self, a: &[u32]);
-            fn arg_slice_u64(&self, a: &[u64]);
-            fn arg_slice_i8(&self, a: &[i8]);
-            fn arg_slice_i16(&self, a: &[i16]);
-            fn arg_slice_i32(&self, a: &[i32]);
-            fn arg_slice_i64(&self, a: &[i64]);
-            fn arg_slice_f32(&self, a: &[f32]);
-            fn arg_slice_f64(&self, a: &[f64]);
-            fn arg_slice_usize(&self, a: &[usize]);
-            fn arg_slice_isize(&self, a: &[isize]);
+            fn arg_bool(a: bool);
+            fn arg_u8(a: u8);
+            fn arg_u16(a: u16);
+            fn arg_u32(a: u32);
+            fn arg_u64(a: u64);
+            fn arg_i8(a: i8);
+            fn arg_i16(a: i16);
+            fn arg_i32(a: i32);
+            fn arg_i64(a: i64);
+            fn arg_f32(a: f32);
+            fn arg_f64(a: f64);
+            fn arg_usize(a: usize);
+            fn arg_isize(a: isize);
 
-            fn arg_str(&self, arg: &str);
-            fn arg_guid(&self, arg: &GUID);
-            fn arg_system_time(&self, a: SystemTime);
-            fn arg_filetime(&self, a: FILETIME);
+            fn arg_slice_u8(a: &[u8]);
+            fn arg_slice_u16(a: &[u16]);
+            fn arg_slice_u32(a: &[u32]);
+            fn arg_slice_u64(a: &[u64]);
+            fn arg_slice_i8(a: &[i8]);
+            fn arg_slice_i16(a: &[i16]);
+            fn arg_slice_i32(a: &[i32]);
+            fn arg_slice_i64(a: &[i64]);
+            fn arg_slice_f32(a: &[f32]);
+            fn arg_slice_f64(a: &[f64]);
+            fn arg_slice_usize(a: &[usize]);
+            fn arg_slice_isize(a: &[isize]);
+
+            fn arg_str(arg: &str);
+            fn arg_u16cstr(arg: &U16CStr);
+            fn arg_guid(arg: &GUID);
+            fn arg_system_time(a: SystemTime);
+            fn arg_filetime(a: FILETIME);
 
             #[event(level = "info")]
-            fn arg_u8_at_info(&self, a: u8);
+            fn arg_u8_at_info(a: u8);
 
             #[event(level = "warn")]
-            fn arg_u8_at_warn(&self, a: u8);
+            fn arg_u8_at_warn(a: u8);
 
             #[event(level = "error")]
-            fn arg_u8_at_error(&self, a: u8);
+            fn arg_u8_at_error(a: u8);
 
             #[event(level = "trace")]
-            fn arg_u8_at_trace(&self, a: u8);
+            fn arg_u8_at_trace(a: u8);
 
             #[event(level = "debug")]
-            fn arg_u8_at_debug(&self, a: u8);
+            fn arg_u8_at_debug(a: u8);
 
             #[event(task = 100)]
-            fn arg_with_task(&self, a: u8);
+            fn arg_with_task(a: u8);
 
             #[event(opcode = 10)]
-            fn arg_with_opcode(&self, a: u8);
+            fn arg_with_opcode(a: u8);
 
-            fn arg_u32_hex(&self, #[event(output = "hex")] a: u32);
+            fn arg_u32_hex(#[event(output = "hex")] a: u32);
 
-            fn arg_hresult(&self, a: HRESULT);
-            fn arg_ntstatus(&self, a: NTSTATUS);
-            fn arg_win32error(&self, a: WIN32ERROR);
+            fn arg_hresult(a: HRESULT);
+            fn arg_ntstatus(a: NTSTATUS);
+            fn arg_win32error(a: WIN32ERROR);
         }
     }
     expected_errors: []
@@ -183,7 +185,7 @@ test_case! {
     input: {
         #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
-            fn event(&self, a: ());
+            fn event(a: ());
         }
     }
     expected_errors: [
@@ -249,15 +251,15 @@ test_case! {
 
 test_case! {
     #[test]
-    fn test_missing_self();
+    fn test_wrong_self_ref();
     input: {
         #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
-            fn event(a: i32);
+            fn event(&self);
         }
     }
     expected_errors: [
-        "The method is required to define a &self receiver parameter.",
+        "Event methods should not provide any receiver arguments",
     ]
 }
 
@@ -267,11 +269,11 @@ test_case! {
     input: {
         #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
-            fn event(&mut self, a: i32);
+            fn event(&mut self);
         }
     }
     expected_errors: [
-        "The receiver (self) parameter is required to be &self. No other variants are supported.",
+        "Event methods should not provide any receiver arguments",
     ]
 }
 
@@ -281,11 +283,11 @@ test_case! {
     input: {
         #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
-            fn event(self, a: i32);
+            fn event(self);
         }
     }
     expected_errors: [
-        "The receiver (self) parameter is required to be &self. No other variants are supported.",
+        "Event methods should not provide any receiver arguments",
     ]
 }
 
@@ -319,7 +321,7 @@ test_case! {
     input: {
         #[trace_logging_events(guid = "bad guid")]
         trait Events {
-            fn bad_arg(&self, a: ());
+            fn bad_arg(a: ());
         }
     }
     expected_errors: [

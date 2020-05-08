@@ -7,9 +7,7 @@
 #![cfg_attr(not(windows), allow(unused))]
 
 pub mod guid;
-mod interop;
 pub mod provider;
-pub mod trace_logging;
 pub mod types;
 
 pub use provider::*;
@@ -23,4 +21,11 @@ pub use data_descriptor::EventDataDescriptor;
 pub enum Error {
     /// A Windows (Win32) error code.
     WindowsError(u32),
+}
+
+#[derive(Default)]
+pub struct EventOptions {
+    pub level: Option<u8>,
+    pub activity_id: Option<guid::GUID>,
+    pub related_activity_id: Option<guid::GUID>,
 }

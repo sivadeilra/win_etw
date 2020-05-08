@@ -54,37 +54,66 @@ impl TraceLogger {
     }
 }
 
-impl log::Log for TraceLogger {
-    fn enabled(&self, _metadata: &log::Metadata) -> bool {
-        true
-    }
+macro_rules! impl_log_levels {
+    (
+        $( $snake_level:ident, $camel_level:ident; )*
+    ) => {
 
-    fn log(&self, record: &log::Record) {
-        let module_path = if self.log_module_path() {
-            record.module_path().unwrap_or("")
-        } else {
-            ""
-        };
+        impl log::Log for TraceLogger {
+            fn enabled(&self, _metadata: &log::Metadata) -> bool {
+                true // self.provider.log_is_enabled()
+            }
 
-        let file_path;
-        let file_line;
-        if self.log_file_path() {
-            file_path = record.file().unwrap_or("");
-            file_line = record.line().unwrap_or(0);
-        } else {
-            file_path = "";
-            file_line = 0;
+            fn log(&self, record: &log::Record) {
+                let module_path = if self.log_module_path() {
+                    record.module_path().unwrap_or("")
+                } else {
+                    ""
+                };
+
+                let file_path;
+                let file_line;
+                if self.log_file_path() {
+                    file_path = record.file().unwrap_or("");
+                    file_line = record.line().unwrap_or(0);
+                } else {
+                    file_path = "";
+                    file_line = 0;
+                }
+
+                let message: String = record.args().to_string();
+
+                let metadata = record.metadata();
+
+                match metadata.level() {
+                    $(
+                        log::Level::$camel_level => {
+                            self.provider.$snake_level(None, module_path, file_path, file_line, &message);
+                        }
+                    )*
+                }
+            }
+
+            fn flush(&self) {}
         }
 
-        let message: String = record.args().to_string();
-        self.provider
-            .log(module_path, file_path, file_line, &message);
     }
-
-    fn flush(&self) {}
 }
 
 #[win_etw_macros::trace_logging_events(guid = "7f006a22-73fb-4c17-b1eb-0a3070f9f187")]
 trait RustLogProvider {
-    fn log(&self, module_path: &str, file: &str, line: u32, message: &str);
+    // $( fn $snake_level(module_path: &str, file: &str, line: u32, message: &str); )*
+    fn error(module_path: &str, file: &str, line: u32, message: &str);
+    fn warn(module_path: &str, file: &str, line: u32, message: &str);
+    fn info(module_path: &str, file: &str, line: u32, message: &str);
+    fn debug(module_path: &str, file: &str, line: u32, message: &str);
+    fn trace(module_path: &str, file: &str, line: u32, message: &str);
+}
+
+impl_log_levels! {
+    error, Error;
+    warn, Warn;
+    info, Info;
+    debug, Debug;
+    trace, Trace;
 }

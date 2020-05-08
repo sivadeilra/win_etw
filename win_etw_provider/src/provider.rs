@@ -1,107 +1,80 @@
 use crate::guid::GUID;
 use crate::{Error, EventDataDescriptor};
 use core::convert::TryFrom;
-use core::ptr::null_mut;
-use widestring::U16CStr;
+use core::ptr::{null, null_mut};
 
 #[cfg(target_os = "windows")]
 use winapi::shared::evntprov;
 
+#[cfg(target_os = "windows")]
+use winapi::shared::winerror;
+
 pub struct EventProvider {
     #[cfg(target_os = "windows")]
     handle: evntprov::REGHANDLE,
-    // enabled_callback: Option<&'a dyn EventProviderCallback>,
 }
-
-pub enum EnableKind {
-    Disable,
-    Enable,
-    Capture,
-}
-
-pub trait EventProviderCallback {
-    fn enable(
-        &self,
-        source_id: &GUID,
-        enable_kind: EnableKind,
-        level: u8,
-        match_any_keyword: u64,
-        match_all_keyword: u64,
-    );
-}
-
-/*
-/// https://docs.microsoft.com/en-us/windows/win32/api/evntprov/ns-evntprov-event_filter_descriptor
-pub enum EventFilter<'a> {
-    ProcessIds(&'a [u64]),
-    EventIds(),
-    StackWalk(),
-    Schematized,
-}
-*/
-
-/*
-unsafe extern "system" fn event_provider_callback(
-    source_id: *const GUID,
-    is_enabled: u32,
-    level: u8,
-    match_any_keyword: u64,
-    match_all_keyword: u64,
-    _filter_data: *const evntprov::EVENT_FILTER_DESCRIPTOR,
-    callback_context: *mut c_void,
-) {
-    let provider: &EventProvider = &*(callback_context as EventProvider<'_>);
-    let enable_kind = match is_enabled {
-        0 => EnableKind::Disable,
-        1 => EnableKind::Enable,
-        2 => EnableKind::Capture,
-        _ => {
-            // Value is not recognized. Ignore this call.
-            return;
-        }
-    };
-    provider.trait_object.unwrap().enable(
-        &*source_id,
-        enable_kind,
-        level,
-        match_any_keyword,
-        match_all_keyword
-    );
-}
-*/
 
 impl EventProvider {
-    /*
-    pub fn register_with_callback<'b>(
-        provider_id: &GUID,
-        callback: &'a dyn EventProviderCallback<
-    ) -> Result<EventProvider<'a>, u32> {
-        let mut handle: evntprov::REGHANDLE = 0;
-        let error =
-            evntprov::EventRegister(provider_id as *const GUID, None, null_mut(), &mut handle);
-        if error != 0 {
-            Err(error)
-        } else {
-            Ok(EventProvider {
-                handle,
-                enabled_callback: None, // Some(callback)
-            })
-        }
-    }
-    */
-
     #[inline(always)]
-    pub fn write(&self, descriptor: &'static EventDescriptor, data: &[EventDataDescriptor<'_>]) {
+    pub fn write(
+        &self,
+        options: Option<&crate::EventOptions>,
+        descriptor: &EventDescriptor,
+        data: &[EventDataDescriptor<'_>],
+    ) {
         #[cfg(target_os = "windows")]
         {
             unsafe {
-                let error = evntprov::EventWrite(
-                    self.handle,
-                    descriptor as *const _ as *const evntprov::EVENT_DESCRIPTOR,
-                    data.len() as u32,
-                    data.as_ptr() as *const evntprov::EVENT_DATA_DESCRIPTOR
-                        as *mut evntprov::EVENT_DATA_DESCRIPTOR,
-                );
+                let mut activity_id_ptr = null();
+                let mut related_activity_id_ptr = null();
+
+                let mut event_descriptor = evntprov::EVENT_DESCRIPTOR {
+                    Id: descriptor.id,
+                    Version: descriptor.version,
+                    Channel: descriptor.channel,
+                    Level: descriptor.level,
+                    Opcode: descriptor.opcode,
+                    Task: descriptor.task,
+                    Keyword: descriptor.keyword,
+                };
+
+                if let Some(options) = options {
+                    if let Some(id) = options.activity_id.as_ref() {
+                        activity_id_ptr = id as *const GUID as *const winapi::shared::guiddef::GUID;
+                    }
+                    if let Some(id) = options.related_activity_id.as_ref() {
+                        related_activity_id_ptr =
+                            id as *const GUID as *const winapi::shared::guiddef::GUID;
+                    }
+                    if let Some(level) = options.level {
+                        event_descriptor.Level = level;
+                    }
+                }
+
+                let use_ex = true;
+                let error;
+
+                if use_ex {
+                    error = evntprov::EventWriteEx(
+                        self.handle,
+                        &event_descriptor,
+                        0,                       // filter
+                        0,                       // flags
+                        activity_id_ptr,         // activity id
+                        related_activity_id_ptr, // related activity id
+                        data.len() as u32,
+                        data.as_ptr() as *const evntprov::EVENT_DATA_DESCRIPTOR
+                            as *mut evntprov::EVENT_DATA_DESCRIPTOR,
+                    );
+                } else {
+                    error = evntprov::EventWrite(
+                        self.handle,
+                        descriptor as *const _ as *const evntprov::EVENT_DESCRIPTOR,
+                        data.len() as u32,
+                        data.as_ptr() as *const evntprov::EVENT_DATA_DESCRIPTOR
+                            as *mut evntprov::EVENT_DATA_DESCRIPTOR,
+                    );
+                }
                 if error != 0 {
                     self.write_failed(error)
                 }
@@ -121,21 +94,6 @@ impl EventProvider {
         }
     }
 
-    pub fn write_string(&self, level: u8, keyword: u64, s: &U16CStr) {
-        #[cfg(target_os = "windows")]
-        {
-            unsafe {
-                let error = evntprov::EventWriteString(self.handle, level, keyword, s.as_ptr());
-                if error != 0 {
-                    #[cfg(feature = "std")]
-                    {
-                        println!("EventWriteString failed: {}", error);
-                    }
-                }
-            }
-        }
-    }
-
     // write_ex
     // write_transfer
 
@@ -143,6 +101,22 @@ impl EventProvider {
         #[cfg(target_os = "windows")]
         {
             unsafe { evntprov::EventProviderEnabled(self.handle, level, keyword) != 0 }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            false
+        }
+    }
+
+    pub fn is_event_enabled(&self, event_descriptor: &EventDescriptor) -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                evntprov::EventEnabled(
+                    self.handle,
+                    event_descriptor as *const _ as *const evntprov::EVENT_DESCRIPTOR,
+                ) != 0
+            }
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -166,10 +140,7 @@ impl EventProvider {
                 if error != 0 {
                     Err(Error::WindowsError(error))
                 } else {
-                    Ok(EventProvider {
-                        handle,
-                        // enabled_callback: None,
-                    })
+                    Ok(EventProvider { handle })
                 }
             }
         }
@@ -213,7 +184,7 @@ impl Drop for EventProvider {
     }
 }
 
-unsafe impl<'a> Sync for EventProvider {}
+unsafe impl Sync for EventProvider {}
 
 #[repr(C)]
 pub struct EventDescriptor {
@@ -224,4 +195,59 @@ pub struct EventDescriptor {
     pub opcode: u8,
     pub task: u16,
     pub keyword: u64,
+}
+
+pub fn with_activity<F: FnOnce() -> R, R>(f: F) -> R {
+    #[cfg(target_os = "windows")]
+    {
+        let mut previous_activity_id: GUID = Default::default();
+
+        let mut restore = RestoreActivityHolder {
+            previous_activity_id: None,
+        };
+
+        unsafe {
+            let result = evntprov::EventActivityIdControl(
+                evntprov::EVENT_ACTIVITY_CTRL_CREATE_SET_ID,
+                &mut previous_activity_id as *mut _ as *mut winapi::shared::guiddef::GUID,
+            );
+            if result == winerror::ERROR_SUCCESS {
+                restore.previous_activity_id = Some(previous_activity_id);
+            } else {
+                // Failed to create/replace the activity ID. There is not much we can do about this.
+            }
+        }
+
+        let result = f();
+        // RestoreActivityHolder::drop() will run, even if f() panics, and will restore the
+        // activity ID of the current thread.
+        drop(restore);
+        result
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        f()
+    }
+}
+
+struct RestoreActivityHolder {
+    previous_activity_id: Option<GUID>,
+}
+
+impl Drop for RestoreActivityHolder {
+    fn drop(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            unsafe {
+                if let Some(previous_activity_id) = self.previous_activity_id.as_ref() {
+                    evntprov::EventActivityIdControl(
+                        evntprov::EVENT_ACTIVITY_CTRL_SET_ID,
+                        previous_activity_id as *const GUID as *const winapi::shared::guiddef::GUID
+                            as *mut _,
+                    );
+                }
+            }
+        }
+    }
 }

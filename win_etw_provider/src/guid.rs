@@ -37,6 +37,8 @@ macro_rules! guid {
 }
 
 #[repr(C)]
+#[derive(Default)]
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub struct GUID {
     pub data1: u32,
     pub data2: u16,
