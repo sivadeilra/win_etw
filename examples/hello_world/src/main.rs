@@ -1,25 +1,16 @@
 #![allow(clippy::unreadable_literal)]
 #![forbid(unsafe_code)]
+use win_etw_macros::trace_logging_provider;
 
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::{Duration, SystemTime};
 use win_etw_provider::types::FILETIME;
 use win_etw_provider::{guid, guid::GUID};
 
-#[cfg(target_os = "windows")]
-mod windows_stuff {
-    pub use winapi::shared::guiddef::GUID;
-    pub use winapi::shared::ntstatus;
-    pub use winapi::shared::winerror;
-}
-#[cfg(target_os = "windows")]
-use windows_stuff::*;
-
 // {861A3948-3B6B-4DDF-B862-B2CB361E238E}
 // DEFINE_GUID(my_provider_guid, 0x861a3948, 0x3b6b, 0x4ddf, 0xb8, 0x62, 0xb2, 0xcb, 0x36, 0x1e, 0x23, 0x8e);
-const PROVIDER_GUID: GUID =
+const EXAMPLE_GUID: GUID =
     guid!(0x861a3948, 0x3b6b, 0x4ddf, 0xb8, 0x62, 0xb2, 0xcb, 0x36, 0x1e, 0x23, 0x8e);
-
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
 fn main() {
     let hello_provider = HelloWorldProvider::new();
@@ -28,7 +19,7 @@ fn main() {
     hello_provider.arg_slice_u8(None, &[44, 55, 66]);
     hello_provider.arg_slice_i32(None, &[10001, 20002, 30003]);
     hello_provider.arg_f32(None, core::f32::consts::PI);
-    hello_provider.arg_guid(None, &PROVIDER_GUID);
+    hello_provider.arg_guid(None, &EXAMPLE_GUID);
 
     let client_addr_v4: SocketAddrV4 = SocketAddrV4::new(Ipv4Addr::new(192, 168, 23, 42), 6667);
     hello_provider.client_connected_v4(None, &client_addr_v4);
@@ -51,6 +42,9 @@ fn main() {
 
     #[cfg(target_os = "windows")]
     {
+        pub use winapi::shared::ntstatus;
+        pub use winapi::shared::winerror;
+
         hello_provider.arg_hresult(None, winerror::DXGI_DDI_ERR_WASSTILLDRAWING);
         hello_provider.arg_ntstatus(None, ntstatus::STATUS_DEVICE_REQUIRES_CLEANING as u32);
         hello_provider.arg_win32error(None, winerror::ERROR_OUT_OF_PAPER);
@@ -62,14 +56,18 @@ fn main() {
         loop {
             std::thread::sleep(Duration::from_millis(3000));
             hello_provider.hello(None, "Looping...  (from Rust)");
+            hello_provider.message_at_critical(None, "something super exciting happened!");
+            hello_provider.message_at_error(None, "something pretty bad happened!");
+            hello_provider.message_at_warn(None, "something warning-worthy happened");
+            hello_provider.message_at_info(None, "something normal happened");
+            hello_provider.message_at_verbose(None, "noisy noisy noisy");    
+            hello_provider.message_at_level_8(None, "incredibly detailed level 8 tracing");        
         }
     }
 }
 
-use win_etw_macros::trace_logging_events;
-
 /// Hello, World, from ETW
-#[trace_logging_events(guid = "861A3948-3B6B-4DDF-B862-B2CB361E238E")]
+#[trace_logging_provider(guid = "861A3948-3B6B-4DDF-B862-B2CB361E238E")]
 trait HelloWorldProvider {
     fn hello(a: &str);
     fn arg_i32(a: i32);
@@ -114,14 +112,32 @@ trait HelloWorldProvider {
 
     fn arg_u16cstr(a: &U16CStr);
     fn arg_osstr(a: &OsStr);
+
+    #[event(level = "critical")]
+    fn message_at_critical(msg: &str);
+
+    #[event(level = "info")]
+    fn message_at_info(msg: &str);
+
+    #[event(level = "warn")]
+    fn message_at_warn(msg: &str);
+
+    #[event(level = "error")]
+    fn message_at_error(msg: &str);
+
+    #[event(level = "verbose")]
+    fn message_at_verbose(msg: &str);
+
+    #[event(level = 8)]
+    fn message_at_level_8(msg: &str);
 }
 
-#[trace_logging_events(guid = "76d66486-d11a-47a8-af05-88942b6edb55")]
+#[trace_logging_provider(guid = "76d66486-d11a-47a8-af05-88942b6edb55")]
 trait AnotherFineProvider {
     fn arg_str(arg: &str);
 }
 
-#[trace_logging_events(guid = "b9978f10-b3e0-4bbe-a4f2-160a2e7148d6")]
+#[trace_logging_provider(guid = "b9978f10-b3e0-4bbe-a4f2-160a2e7148d6")]
 trait TestManyEvents {
     fn arg_none();
     fn arg_bool(a: bool);
@@ -157,6 +173,9 @@ trait TestManyEvents {
     fn arg_system_time(a: SystemTime);
     fn arg_filetime(a: FILETIME);
 
+    #[event(level = "critical")]
+    fn arg_u8_at_critical(a: u8);
+
     #[event(level = "info")]
     fn arg_u8_at_info(a: u8);
 
@@ -166,11 +185,11 @@ trait TestManyEvents {
     #[event(level = "error")]
     fn arg_u8_at_error(a: u8);
 
-    #[event(level = "trace")]
-    fn arg_u8_at_trace(a: u8);
+    #[event(level = "verbose")]
+    fn arg_u8_at_verbose(a: u8);
 
-    #[event(level = "debug")]
-    fn arg_u8_at_debug(a: u8);
+    #[event(level = 8)]
+    fn arg_u8_at_level_8(a: u8);
 
     #[event(task = 100)]
     fn arg_with_task(a: u8);
@@ -183,10 +202,4 @@ trait TestManyEvents {
     fn arg_hresult(a: HRESULT);
     fn arg_ntstatus(a: NTSTATUS);
     fn arg_win32error(a: WIN32ERROR);
-}
-
-#[cfg(WIP)]
-#[trace_logging_events(guid = "861A3948-3B6B-4DDF-B862-B2CB361E238E")]
-mod hello_world_events {
-    fn arg_foo() {}
 }

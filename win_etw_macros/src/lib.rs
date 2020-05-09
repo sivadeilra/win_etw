@@ -1,4 +1,4 @@
-//! Provides the `#[trace_logging_events]` macro, which allows you to define a
+//! Provides the `#[trace_logging_provider]` macro, which allows you to define a
 //! [Trace Logging Provider](https://docs.microsoft.com/en-us/windows/win32/etw/about-event-tracing#providers)
 //! for use with the [Event Tracing for Windows (ETW)](https://docs.microsoft.com/en-us/windows/win32/etw/event-tracing-portal)
 //! framework.
@@ -12,9 +12,9 @@
 //! the events:
 //!
 //! ```ignore
-//! use win_etw_macros::trace_logging_events;
+//! use win_etw_macros::trace_logging_provider;
 //!
-//! #[trace_logging_events(guid = "... your guid here ...")]
+//! #[trace_logging_provider(guid = "... your guid here ...")]
 //! pub trait MyAppEvents {
 //!     fn user_connected(&self, user_id: &str, client_address: &SockAddr);
 //!     fn channel_created(&self, owner: &str, channel: &str);
@@ -66,7 +66,7 @@
 //!
 //! ## Define the event provider and its events
 //! Add a trait definition to your source code and annotate it with the
-//! `#[trace_logging_events(guid = "...")]` macro, using the GUID that you just created. The trait
+//! `#[trace_logging_provider(guid = "...")]` macro, using the GUID that you just created. The trait
 //! definition is only used as input to the procedural macro; the trait is not emitted into your
 //! crate, and cannot be used as a normal trait.
 //!
@@ -74,13 +74,13 @@
 //! The parameters of each method define the fields of the event type. Only a limited set of field
 //! types are supported (enumerated below).
 //!
-//! The `#[trace_logging_events]` macro consumes the trait definition and produces a `struct`
+//! The `#[trace_logging_provider]` macro consumes the trait definition and produces a `struct`
 //! definition with the same name and the same method signatures. (The trait is _not_ available for
 //! use as an ordinary trait.)
 //!
 //! ```ignore
-//! # use win_etw_macros::trace_logging_events;
-//! #[trace_logging_events(guid = "... your guid here ...")]
+//! # use win_etw_macros::trace_logging_provider;
+//! #[trace_logging_provider(guid = "... your guid here ...")]
 //! pub trait MyAppEvents {
 //!     fn http_request(&self, client_address: &SockAddr, is_https: bool, status_code: u32, status: &str);
 //!     fn database_connection_created(&self, connection_id: u64, server: &str);
@@ -161,6 +161,7 @@
 
 // https://doc.rust-lang.org/reference/procedural-macros.html
 
+#![deny(missing_docs)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::cognitive_complexity)]
 #![allow(clippy::single_match)]
@@ -184,7 +185,7 @@ mod tests;
 /// Allows you to create ETW Trace Logging Providers. See the module docs for more detailed
 /// instructions for this macro.
 #[proc_macro_attribute]
-pub fn trace_logging_events(
+pub fn trace_logging_provider(
     attr: proc_macro::TokenStream,
     input: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
@@ -208,7 +209,7 @@ fn trace_logging_events_core(attr: TokenStream, item_tokens: TokenStream) -> Tok
         Ok(unrecognized) => {
             return Error::new_spanned(
                 &unrecognized,
-                "The #[trace_logging_events] attribute cannot be used with this kind of item.",
+                "The #[trace_logging_provider] attribute cannot be used with this kind of item.",
             )
             .to_compile_error();
         }
@@ -600,7 +601,7 @@ fn err_spanned<T: quote::ToTokens>(item: &T, msg: &str) -> TokenStream {
 }
 
 // `provider_name` is not necessarily the same as the identifier used in source code.
-// It can be overridden using `#[trace_logging_events(name = "some_name_here")]`.
+// It can be overridden using `#[trace_logging_provider(name = "some_name_here")]`.
 fn create_provider_metadata(provider_name: &str, provider_metadata_ident: &Ident) -> TokenStream {
     let mut provider_metadata: Vec<u8> = Vec::new();
 
@@ -968,7 +969,7 @@ fn parse_event_field(
 
 use errors::CombinedErrors;
 
-/// Represents the "attribute" parameter of the `#[trace_logging_events]` proc macro.
+/// Represents the "attribute" parameter of the `#[trace_logging_provider]` proc macro.
 #[derive(Default, Debug)]
 struct ProviderAttributes {
     uuid: Uuid,
@@ -1055,7 +1056,7 @@ impl syn::parse::Parse for ProviderAttributes {
                 "The 'guid' attribute is required.
 Please generate a GUID that uniquely identfies this event provider.
 Do not use the same GUID for different event providers.
-Example: #[trace_logging_events(guid = \"123e4567-e89b...\")]",
+Example: #[trace_logging_provider(guid = \"123e4567-e89b...\")]",
             ));
             Uuid::nil()
         };
@@ -1114,7 +1115,8 @@ fn parse_event_attributes(
     method_ident: &Ident,
     input_method_attrs: &[syn::Attribute],
 ) -> EventAttributes {
-    let mut level: Expr = parse_quote!(::win_etw_provider::metadata::EVENT_LEVEL_INFO);
+    let mut level: Expr =
+        parse_quote!(::win_etw_provider::metadata::Level::INFO.0);
     let mut opcode: Expr = parse_quote!(0);
     let mut task: Expr = parse_quote!(0);
 
@@ -1141,36 +1143,20 @@ fn parse_event_attributes(
                             })) => {
                                 if *path == parse_quote!(level) {
                                     match lit {
-                                        Lit::Str(lit_str) => match lit_str.value().as_str() {
-                                            "error" => {
-                                                level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_ERROR
-                                                )
-                                            }
-                                            "warn" => {
-                                                level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_WARN
-                                                )
-                                            }
-                                            "info" => {
-                                                level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_INFO
-                                                )
-                                            }
-                                            "debug" => {
-                                                level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_DEBUG
-                                                )
-                                            }
-                                            "trace" => {
-                                                level = parse_quote!(
-                                                    ::win_etw_provider::metadata::EVENT_LEVEL_TRACE
-                                                )
-                                            }
-                                            _ => {
-                                                errors.push(Error::new_spanned(item, "The value specified for 'level' is not a valid string."));
-                                            }
-                                        },
+                                        Lit::Str(lit_str) => {
+                                            let level_ident = match lit_str.value().as_str() {
+                                                "critical" => quote!(CRITICAL),
+                                                "error" => quote!(ERROR),
+                                                "warn" => quote!(WARN),
+                                                "info" => quote!(INFO),
+                                                "verbose" => quote!(VERBOSE),
+                                                _ => {
+                                                    errors.push(Error::new_spanned(item, "The value specified for 'level' is not a valid string."));
+                                                    quote!(INFO)
+                                                }
+                                            };
+                                            level = parse_quote!(::win_etw_provider::metadata::Level::#level_ident.0);
+                                        }
                                         Lit::Int(_) => {
                                             level = Expr::Lit(ExprLit {
                                                 lit: lit.clone(),

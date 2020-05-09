@@ -85,7 +85,7 @@ macro_rules! test_case {
         fn $test_case_name:ident();
 
         input: {
-            #[trace_logging_events ( $( $attrs:tt )* )]
+            #[trace_logging_provider ( $( $attrs:tt )* )]
             $( $input:tt )*
         }
 
@@ -110,7 +110,7 @@ test_case! {
     #[test]
     fn test_many_types();
     input: {
-        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        #[trace_logging_provider(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
             fn arg_none();
 
@@ -182,7 +182,7 @@ test_case! {
     #[test]
     fn test_unsupported_field_types();
     input: {
-        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        #[trace_logging_provider(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
             fn event(a: ());
         }
@@ -196,7 +196,7 @@ test_case! {
     #[test]
     fn test_event_return_type();
     input: {
-        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        #[trace_logging_provider(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
             fn event(&self) -> String;
         }
@@ -210,7 +210,7 @@ test_case! {
     #[test]
     fn test_event_default_implementation();
     input: {
-        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        #[trace_logging_provider(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
             fn event(&self) { }
         }
@@ -224,7 +224,7 @@ test_case! {
     #[test]
     fn test_event_generic();
     input: {
-        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        #[trace_logging_provider(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
             fn event<T>(&self);
         }
@@ -238,7 +238,7 @@ test_case! {
     #[test]
     fn test_event_generic_lifetime();
     input: {
-        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        #[trace_logging_provider(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
             fn event<'a>(&self);
         }
@@ -252,7 +252,7 @@ test_case! {
     #[test]
     fn test_wrong_self_ref();
     input: {
-        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        #[trace_logging_provider(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
             fn event(&self);
         }
@@ -266,7 +266,7 @@ test_case! {
     #[test]
     fn test_wrong_self_mut();
     input: {
-        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        #[trace_logging_provider(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
             fn event(&mut self);
         }
@@ -280,7 +280,7 @@ test_case! {
     #[test]
     fn test_wrong_self_move();
     input: {
-        #[trace_logging_events(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
+        #[trace_logging_provider(guid = "610259b8-9270-46f2-ad94-2f805721b287")]
         trait Events {
             fn event(self);
         }
@@ -294,7 +294,7 @@ test_case! {
     #[test]
     fn test_missing_guid();
     input: {
-        #[trace_logging_events()]
+        #[trace_logging_provider()]
         trait Events {}
     }
     expected_errors: [
@@ -306,7 +306,7 @@ test_case! {
     #[test]
     fn test_bad_guid_literal();
     input: {
-        #[trace_logging_events(guid = 0)]
+        #[trace_logging_provider(guid = 0)]
         trait Events {}
     }
     expected_errors: [
@@ -318,7 +318,7 @@ test_case! {
     #[test]
     fn test_bad_multiple_errors();
     input: {
-        #[trace_logging_events(guid = "bad guid")]
+        #[trace_logging_provider(guid = "bad guid")]
         trait Events {
             fn bad_arg(a: ());
         }
@@ -333,7 +333,7 @@ test_case! {
     #[test]
     fn test_invalid_event_attributes();
     input: {
-        #[trace_logging_events()]
+        #[trace_logging_provider()]
         trait Events {
             #[event(bad_name = "bad_value")]
             fn event(&self);
@@ -348,7 +348,7 @@ test_case! {
     #[test]
     fn test_event_attributes_others_forbidden();
     input: {
-        #[trace_logging_events()]
+        #[trace_logging_provider()]
         trait Events {
             #[some_other_attribute]
             fn event(&self);
@@ -363,11 +363,11 @@ test_case! {
     #[test]
     fn wrong_item_kind();
     input: {
-        #[trace_logging_events()]
+        #[trace_logging_provider()]
         fn wrong_item_kind() {}
     }
     expected_errors: [
-        "The #[trace_logging_events] attribute cannot be used with this kind of item.",
+        "The #[trace_logging_provider] attribute cannot be used with this kind of item.",
     ]
 }
 

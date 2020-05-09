@@ -274,7 +274,7 @@ impl EtwProvider {
 
     // See TraceLoggingRegisterEx in traceloggingprovider.h.
     // This registers provider metadata.
-    pub fn register_provider_metadata(&mut self, provider_metadata: &'static [u8]) {
+    pub fn register_provider_metadata(&mut self, provider_metadata: &'static [u8]) -> Result<(), Error> {
         #[cfg(target_os = "windows")]
         {
             unsafe {
@@ -285,12 +285,15 @@ impl EtwProvider {
                     u32::try_from(provider_metadata.len()).unwrap(),
                 );
                 if error != 0 {
-                    #[cfg(feature = "std")]
-                    {
-                        eprintln!("warning: call to EventSetInformation (to register event provider metadata) failed: {}", error);
-                    }
+                    Err(Error::WindowsError(error))
+                } else {
+                    Ok(())
                 }
             }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Ok(())
         }
     }
 }

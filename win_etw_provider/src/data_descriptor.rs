@@ -63,6 +63,9 @@ impl EventDataDescriptor<'static> {
     }
 }
 
+const EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA: u32 = 2;
+const EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA: u32 = 1;
+
 impl<'a> EventDataDescriptor<'a> {
     pub fn is_empty(&self) -> bool {
         self.ptr == 0 && self.size == 0
@@ -81,7 +84,7 @@ impl<'a> EventDataDescriptor<'a> {
         Self {
             ptr: s.as_ptr() as usize as u64,
             size: s.len() as u32,
-            kind: win_etw_metadata::EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA,
+            kind: EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA,
             phantom_ref: PhantomData,
         }
     }
@@ -90,7 +93,7 @@ impl<'a> EventDataDescriptor<'a> {
         Self {
             ptr: s.as_ptr() as usize as u64,
             size: s.len() as u32,
-            kind: win_etw_metadata::EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA,
+            kind: EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA,
             phantom_ref: PhantomData,
         }
     }

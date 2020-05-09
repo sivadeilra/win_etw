@@ -100,7 +100,7 @@ macro_rules! impl_log_levels {
     }
 }
 
-#[win_etw_macros::trace_logging_events(guid = "7f006a22-73fb-4c17-b1eb-0a3070f9f187")]
+#[win_etw_macros::trace_logging_provider(guid = "7f006a22-73fb-4c17-b1eb-0a3070f9f187")]
 trait RustLogProvider {
     // $( fn $snake_level(module_path: &str, file: &str, line: u32, message: &str); )*
     fn error(module_path: &str, file: &str, line: u32, message: &str);
