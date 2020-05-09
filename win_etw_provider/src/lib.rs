@@ -24,7 +24,9 @@ pub enum Error {
 
 #[derive(Default)]
 pub struct EventOptions {
-    pub level: Option<u8>,
+    pub level: Option<Level>,
     pub activity_id: Option<guid::GUID>,
     pub related_activity_id: Option<guid::GUID>,
 }
+
+pub use win_etw_metadata::Level;

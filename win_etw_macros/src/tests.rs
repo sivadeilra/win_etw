@@ -156,11 +156,11 @@ test_case! {
             #[event(level = "error")]
             fn arg_u8_at_error(a: u8);
 
-            #[event(level = "trace")]
-            fn arg_u8_at_trace(a: u8);
+            #[event(level = "verbose")]
+            fn arg_u8_at_verbose(a: u8);
 
-            #[event(level = "debug")]
-            fn arg_u8_at_debug(a: u8);
+            #[event(level = 8)]
+            fn arg_u8_at_level_8(a: u8);
 
             #[event(task = 100)]
             fn arg_with_task(a: u8);

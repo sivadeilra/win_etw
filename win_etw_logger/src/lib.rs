@@ -7,8 +7,14 @@
 #![allow(clippy::useless_let_if_seq)]
 
 extern crate alloc;
-use alloc::string::{String, ToString};
+use alloc::string::ToString;
 use core::sync::atomic::{AtomicBool, Ordering};
+use win_etw_macros::trace_logging_provider;
+
+#[trace_logging_provider(guid = "7f006a22-73fb-4c17-b1eb-0a3070f9f187")]
+trait RustLogProvider {
+    fn log(module_path: &str, file: &str, line: u32, message: &str);
+}
 
 /// Provides a `log::Log` implementation that sends events to Event Tracing for Windows (ETW).
 pub struct TraceLogger {
@@ -54,66 +60,49 @@ impl TraceLogger {
     }
 }
 
-macro_rules! impl_log_levels {
-    (
-        $( $snake_level:ident, $camel_level:ident; )*
-    ) => {
-
-        impl log::Log for TraceLogger {
-            fn enabled(&self, _metadata: &log::Metadata) -> bool {
-                true // self.provider.log_is_enabled()
-            }
-
-            fn log(&self, record: &log::Record) {
-                let module_path = if self.log_module_path() {
-                    record.module_path().unwrap_or("")
-                } else {
-                    ""
-                };
-
-                let file_path;
-                let file_line;
-                if self.log_file_path() {
-                    file_path = record.file().unwrap_or("");
-                    file_line = record.line().unwrap_or(0);
-                } else {
-                    file_path = "";
-                    file_line = 0;
-                }
-
-                let message: String = record.args().to_string();
-
-                let metadata = record.metadata();
-
-                match metadata.level() {
-                    $(
-                        log::Level::$camel_level => {
-                            self.provider.$snake_level(None, module_path, file_path, file_line, &message);
-                        }
-                    )*
-                }
-            }
-
-            fn flush(&self) {}
-        }
-
+fn level_to_etw(level: log::Level) -> win_etw_provider::Level {
+    match level {
+        log::Level::Error => win_etw_provider::Level::ERROR,
+        log::Level::Warn => win_etw_provider::Level::WARN,
+        log::Level::Info => win_etw_provider::Level::INFO,
+        log::Level::Debug => win_etw_provider::Level::VERBOSE,
+        log::Level::Trace => win_etw_provider::Level(6),
     }
 }
 
-#[win_etw_macros::trace_logging_provider(guid = "7f006a22-73fb-4c17-b1eb-0a3070f9f187")]
-trait RustLogProvider {
-    // $( fn $snake_level(module_path: &str, file: &str, line: u32, message: &str); )*
-    fn error(module_path: &str, file: &str, line: u32, message: &str);
-    fn warn(module_path: &str, file: &str, line: u32, message: &str);
-    fn info(module_path: &str, file: &str, line: u32, message: &str);
-    fn debug(module_path: &str, file: &str, line: u32, message: &str);
-    fn trace(module_path: &str, file: &str, line: u32, message: &str);
-}
+impl log::Log for TraceLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.provider
+            .log_is_enabled(Some(level_to_etw(metadata.level())))
+    }
 
-impl_log_levels! {
-    error, Error;
-    warn, Warn;
-    info, Info;
-    debug, Debug;
-    trace, Trace;
+    fn log(&self, record: &log::Record) {
+        let module_path = if self.log_module_path() {
+            record.module_path().unwrap_or("")
+        } else {
+            ""
+        };
+
+        let file_path;
+        let file_line;
+        if self.log_file_path() {
+            file_path = record.file().unwrap_or("");
+            file_line = record.line().unwrap_or(0);
+        } else {
+            file_path = "";
+            file_line = 0;
+        }
+
+        let message = record.args().to_string();
+        let metadata = record.metadata();
+
+        let options = win_etw_provider::EventOptions {
+            level: Some(level_to_etw(metadata.level())),
+            ..Default::default()
+        };
+        self.provider
+            .log(Some(&options), module_path, file_path, file_line, &message);
+    }
+
+    fn flush(&self) {}
 }

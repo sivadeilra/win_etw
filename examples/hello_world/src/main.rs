@@ -60,8 +60,8 @@ fn main() {
             hello_provider.message_at_error(None, "something pretty bad happened!");
             hello_provider.message_at_warn(None, "something warning-worthy happened");
             hello_provider.message_at_info(None, "something normal happened");
-            hello_provider.message_at_verbose(None, "noisy noisy noisy");    
-            hello_provider.message_at_level_8(None, "incredibly detailed level 8 tracing");        
+            hello_provider.message_at_verbose(None, "noisy noisy noisy");
+            hello_provider.message_at_level_8(None, "incredibly detailed level 8 tracing");
         }
     }
 }

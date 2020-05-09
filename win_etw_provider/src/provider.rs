@@ -1,4 +1,5 @@
 use crate::guid::GUID;
+use crate::Level;
 use crate::{Error, EventDataDescriptor};
 use core::convert::TryFrom;
 use core::pin::Pin;
@@ -93,7 +94,7 @@ impl Provider for EtwProvider {
                     Id: descriptor.id,
                     Version: descriptor.version,
                     Channel: descriptor.channel,
-                    Level: descriptor.level,
+                    Level: descriptor.level.0,
                     Opcode: descriptor.opcode,
                     Task: descriptor.task,
                     Keyword: descriptor.keyword,
@@ -108,7 +109,7 @@ impl Provider for EtwProvider {
                             id as *const GUID as *const winapi::shared::guiddef::GUID;
                     }
                     if let Some(level) = options.level {
-                        event_descriptor.Level = level;
+                        event_descriptor.Level = level.0;
                     }
                 }
 
@@ -147,11 +148,16 @@ impl Provider for EtwProvider {
     fn is_event_enabled(&self, event_descriptor: &EventDescriptor) -> bool {
         #[cfg(target_os = "windows")]
         {
-            unsafe {
-                evntprov::EventEnabled(
-                    self.handle,
-                    event_descriptor as *const _ as *const evntprov::EVENT_DESCRIPTOR,
-                ) != 0
+            if false {
+                unsafe {
+                    evntprov::EventEnabled(
+                        self.handle,
+                        event_descriptor as *const _ as *const evntprov::EVENT_DESCRIPTOR,
+                    ) != 0
+                }
+            } else {
+                let max_level = self.stable.as_ref().max_level.load(SeqCst);
+                event_descriptor.level.0 <= max_level
             }
         }
         #[cfg(not(target_os = "windows"))]
@@ -198,18 +204,15 @@ mod win_support {
         filter_data: *mut evntprov::EVENT_FILTER_DESCRIPTOR,
         context: *mut winapi::ctypes::c_void,
     ) {
-        if source_id.is_null() {
-            eprintln!("enable_callback: source_id is null");
-            return;
-        }
-
         // This should never happen.
         if context.is_null() {
-            eprintln!("context is null, ignoring");
             return;
         }
-
         let stable_data: &StableProviderData = &*(context as *const _ as *const StableProviderData);
+
+        if source_id.is_null() {
+            eprintln!("enable_callback: source_id is null");
+        }
 
         let source_id: GUID = (*(source_id as *const GUID)).clone();
         eprintln!(
@@ -274,7 +277,10 @@ impl EtwProvider {
 
     // See TraceLoggingRegisterEx in traceloggingprovider.h.
     // This registers provider metadata.
-    pub fn register_provider_metadata(&mut self, provider_metadata: &'static [u8]) -> Result<(), Error> {
+    pub fn register_provider_metadata(
+        &mut self,
+        provider_metadata: &'static [u8],
+    ) -> Result<(), Error> {
         #[cfg(target_os = "windows")]
         {
             unsafe {
@@ -316,7 +322,7 @@ pub struct EventDescriptor {
     pub id: u16,
     pub version: u8,
     pub channel: u8,
-    pub level: u8,
+    pub level: Level,
     pub opcode: u8,
     pub task: u16,
     pub keyword: u64,

@@ -493,19 +493,28 @@ fn trace_logging_events_core(attr: TokenStream, item_tokens: TokenStream) -> Tok
                     ];
                     ::win_etw_provider::provider::Provider::write(&self.provider,
                         options,
-                        // &#provider_mod_ident::event_descriptors::#event_ident,
                         &event_descriptor,
                         &data_descriptors,
                     );
                 }
             }
 
-            pub fn #event_is_enabled_name(&self) -> bool {
+            pub fn #event_is_enabled_name(&self, level: ::core::option::Option<::win_etw_provider::Level>) -> bool {
                 #[cfg(target_os = "windows")]
                 {
+                    let mut event_descriptor: ::win_etw_provider::provider::EventDescriptor = ::win_etw_provider::provider::EventDescriptor {
+                        id: #event_id,
+                        version: 0,
+                        channel: 11,
+                        level: level.unwrap_or(#event_level),
+                        opcode: #event_opcode,
+                        task: #event_task,
+                        keyword: 0,
+                    };
+
                     ::win_etw_provider::provider::Provider::is_event_enabled(
                         &self.provider,
-                        &#provider_mod_ident::event_descriptors::#event_ident)
+                        &event_descriptor)
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -585,10 +594,12 @@ fn trace_logging_events_core(attr: TokenStream, item_tokens: TokenStream) -> Tok
         #[doc(hidden)]
         #[allow(non_snake_case)]
         mod #provider_mod_ident {
+            /*
             pub(crate) mod event_descriptors {
                 #![allow(non_upper_case_globals)]
                 #( #event_descriptors )*
             }
+            */
         }
     });
 
@@ -1115,8 +1126,7 @@ fn parse_event_attributes(
     method_ident: &Ident,
     input_method_attrs: &[syn::Attribute],
 ) -> EventAttributes {
-    let mut level: Expr =
-        parse_quote!(::win_etw_provider::metadata::Level::INFO.0);
+    let mut level: Expr = parse_quote!(::win_etw_provider::Level::INFO);
     let mut opcode: Expr = parse_quote!(0);
     let mut task: Expr = parse_quote!(0);
 
@@ -1155,13 +1165,10 @@ fn parse_event_attributes(
                                                     quote!(INFO)
                                                 }
                                             };
-                                            level = parse_quote!(::win_etw_provider::metadata::Level::#level_ident.0);
+                                            level = parse_quote!(::win_etw_provider::Level::#level_ident);
                                         }
                                         Lit::Int(_) => {
-                                            level = Expr::Lit(ExprLit {
-                                                lit: lit.clone(),
-                                                attrs: Vec::new(),
-                                            });
+                                            level = parse_quote!(::win_etw_provider::Level(#lit));
                                         }
                                         _ => {
                                             errors.push(Error::new_spanned(item, "The value specified for 'level' is not recognized."));
