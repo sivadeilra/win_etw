@@ -69,11 +69,10 @@
 //! ```
 //!
 //! ## Create an instance of the event provider
-//! At initialization time (in your `fn main()`, etc.), create an instance of the event provider
-//! by calling its `register` associated function:
+//! At initialization time (in your `fn main()`, etc.), create an instance of the event provider:
 //!
 //! ```ignore
-//! let my_app_events = MyAppEvents::register()?;
+//! let my_app_events = MyAppEvents::new();
 //! ```
 //!
 //! Your application should only create a single instance of each event provider, per process.
