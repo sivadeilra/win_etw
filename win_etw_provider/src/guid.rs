@@ -1,3 +1,6 @@
+use zerocopy::{AsBytes, FromBytes};
+
+/// Initializes a `GUID` from literal values.
 #[macro_export]
 macro_rules! guid {
     (
@@ -6,7 +9,7 @@ macro_rules! guid {
         $c:expr,
         $d:expr
     ) => {
-        $crate::types::GUID {
+        $crate::GUID {
             data1: $a,
             data2: $b,
             data3: $c,
@@ -27,7 +30,7 @@ macro_rules! guid {
         $d6:expr,
         $d7:expr
     ) => {
-        $crate::types::GUID {
+        $crate::GUID {
             data1: $a,
             data2: $b,
             data3: $c,
@@ -36,12 +39,23 @@ macro_rules! guid {
     };
 }
 
+/// The Windows [`GUID`](https://docs.microsoft.com/en-us/windows/win32/api/guiddef/ns-guiddef-guid)
+/// type.
+///
+/// `win_etw_provider` defines this type, rather than directly referencing (or re-exporting)
+/// an equivalent type from other crates in order to minimize its dependencies. `GUID` has a well-
+/// defined byte representation, so converting between different implementations of `GUID` is
+/// not a problem.
 #[repr(C)]
-#[derive(Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, AsBytes, FromBytes)]
 pub struct GUID {
+    /// Contains bytes 0-3 (inclusive) of the GUID, in big-endian form.
     pub data1: u32,
+    /// Contains bytes 4-5 (inclusive) of the GUID, in big-endian form.
     pub data2: u16,
+    /// Contains bytes 6-7 (inclusive) of the GUID, in big-endian form.
     pub data3: u16,
+    /// Contains bytes 8-15 (inclusive) of the GUID.
     pub data4: [u8; 8],
 }
 

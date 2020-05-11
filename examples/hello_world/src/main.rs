@@ -4,8 +4,7 @@ use win_etw_macros::trace_logging_provider;
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::{Duration, SystemTime};
-use win_etw_provider::types::FILETIME;
-use win_etw_provider::{guid, guid::GUID};
+use win_etw_provider::{guid, FILETIME, GUID};
 
 // {861A3948-3B6B-4DDF-B862-B2CB361E238E}
 // DEFINE_GUID(my_provider_guid, 0x861a3948, 0x3b6b, 0x4ddf, 0xb8, 0x62, 0xb2, 0xcb, 0x36, 0x1e, 0x23, 0x8e);

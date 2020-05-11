@@ -9,7 +9,10 @@ use core::sync::atomic::{AtomicU8, Ordering::SeqCst};
 #[cfg(target_os = "windows")]
 use win_support::*;
 
+/// Describes the functions needed for an event provider backend. This is an implementation
+/// detail, and should not be used directly by applications.
 pub trait Provider {
+    /// Writes one event.
     fn write(
         &self,
         options: Option<&crate::EventOptions>,
@@ -17,10 +20,14 @@ pub trait Provider {
         data: &[EventDataDescriptor<'_>],
     );
 
+    /// Checks whether the event provider is enabled.
     fn is_enabled(&self, level: u8, keyword: u64) -> bool;
+
+    /// Checks whether a specific event is enabled.
     fn is_event_enabled(&self, event_descriptor: &EventDescriptor) -> bool;
 }
 
+/// Implements `Provider` by discarding all events.
 pub struct NullProvider;
 
 impl Provider for NullProvider {
@@ -67,12 +74,13 @@ impl<T: Provider> Provider for Option<T> {
     }
 }
 
+/// Implements `Provider` by registering with ETW.
 pub struct EtwProvider {
     #[cfg(target_os = "windows")]
     handle: evntprov::REGHANDLE,
 
     #[cfg(target_os = "windows")]
-    #[allow(dead_code)] // Needed for lifetime control
+    // #[allow(dead_code)] // Needed for lifetime control
     stable: Pin<Box<StableProviderData>>,
 }
 
@@ -210,43 +218,56 @@ mod win_support {
         }
         let stable_data: &StableProviderData = &*(context as *const _ as *const StableProviderData);
 
-        if source_id.is_null() {
-            eprintln!("enable_callback: source_id is null");
+        let source_id: GUID = if source_id.is_null() {
+            GUID::default()
+        } else {
+            (*(source_id as *const GUID)).clone()
+        };
+        if cfg!(feature = "dev") {
+            eprintln!(
+                "enable_callback: source_id {} is_enabled {}, level {}, any {:#x} all {:#x} filter? {:?}",
+                source_id, is_enabled_code, level, match_any_keyword, match_all_keyword,
+                !filter_data.is_null()
+            );
         }
-
-        let source_id: GUID = (*(source_id as *const GUID)).clone();
-        eprintln!(
-        "enable_callback: source_id {} is_enabled {}, level {}, any {:#x} all {:#x} filter? {:?}",
-        source_id, is_enabled_code, level, match_any_keyword, match_all_keyword,
-        !filter_data.is_null()
-    );
 
         match is_enabled_code {
             evntrace::EVENT_CONTROL_CODE_ENABLE_PROVIDER => {
-                eprintln!("ETW is ENABLING this provider.  setting level: {}", level);
+                if cfg!(feature = "dev") {
+                    eprintln!("ETW is ENABLING this provider.  setting level: {}", level);
+                }
                 stable_data.max_level.store(level, SeqCst);
             }
             evntrace::EVENT_CONTROL_CODE_DISABLE_PROVIDER => {
-                eprintln!("ETW is DISABLING this provider.  setting level: {}", level);
+                if cfg!(feature = "dev") {
+                    eprintln!("ETW is DISABLING this provider.  setting level: {}", level);
+                }
                 stable_data.max_level.store(level, SeqCst);
             }
             evntrace::EVENT_CONTROL_CODE_CAPTURE_STATE => {
                 // ETW is requesting that the provider log its state information. The meaning of this
                 // is provider-dependent. Currently, this functionality is not exposed to Rust apps.
-                eprintln!("EVENT_CONTROL_CODE_CAPTURE_STATE");
+                if cfg!(feature = "dev") {
+                    eprintln!("EVENT_CONTROL_CODE_CAPTURE_STATE");
+                }
             }
             _ => {
                 // The control code is unrecognized.
-                eprintln!(
-                    "enable_callback: control code {} is not recognized",
-                    is_enabled_code
-                );
+                if cfg!(feature = "dev") {
+                    eprintln!(
+                        "enable_callback: control code {} is not recognized",
+                        is_enabled_code
+                    );
+                }
             }
         }
     }
 }
 
 impl EtwProvider {
+    /// Registers an event provider with ETW.
+    ///
+    /// The implementation uses `[EventWriteEx](https://docs.microsoft.com/en-us/windows/win32/api/evntprov/nf-evntprov-eventwriteex)`.
     pub fn new(provider_id: &GUID) -> Result<EtwProvider, Error> {
         #[cfg(target_os = "windows")]
         {
@@ -275,8 +296,10 @@ impl EtwProvider {
         }
     }
 
-    // See TraceLoggingRegisterEx in traceloggingprovider.h.
-    // This registers provider metadata.
+    // pub fn new_with_metadata(provider: &GUID, provider_metadata: &'static [u8]) -> Result<EtwProvider
+
+    /// See TraceLoggingRegisterEx in traceloggingprovider.h.
+    /// This registers provider metadata.
     pub fn register_provider_metadata(
         &mut self,
         provider_metadata: &'static [u8],
@@ -293,6 +316,7 @@ impl EtwProvider {
                 if error != 0 {
                     Err(Error::WindowsError(error))
                 } else {
+                    eprintln!("register_provider_metadata: succeeded");
                     Ok(())
                 }
             }
@@ -317,7 +341,10 @@ impl Drop for EtwProvider {
 
 unsafe impl Sync for EtwProvider {}
 
+/// Describes parameters for an event. This is an implementation detail, and should not be directly
+/// used by applications.
 #[repr(C)]
+#[allow(missing_docs)]
 pub struct EventDescriptor {
     pub id: u16,
     pub version: u8,
@@ -328,6 +355,12 @@ pub struct EventDescriptor {
     pub keyword: u64,
 }
 
+/// Allows an application to enter a nested activity scope. This creates a new activity ID,
+/// sets this activity ID as the current activity ID of the current thread, and then runs the
+/// provided function. After the function finishes, it restores the activity ID of the calling
+/// thread (even if a panic occurs).
+///
+/// See `[EventActivityIdControl](https://docs.microsoft.com/en-us/windows/win32/api/evntprov/nf-evntprov-eventactivityidcontrol)`.
 #[inline(always)]
 pub fn with_activity<F: FnOnce() -> R, R>(f: F) -> R {
     #[cfg(target_os = "windows")]

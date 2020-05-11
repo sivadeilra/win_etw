@@ -127,7 +127,7 @@ well_known_types! {
     guid: &GUID => {
         is_ref: true, primitive: false,
         in_type: InFlag::GUID,
-        replacement_type: Some(parse_quote!(&::win_etw_provider::types::GUID)),
+        replacement_type: Some(parse_quote!(&::win_etw_provider::GUID)),
     }
     SocketAddrV4: &SocketAddrV4 => {
         is_ref: false,
@@ -160,7 +160,7 @@ well_known_types! {
         is_ref: true,
         primitive: false,
         in_type: InFlag::FILETIME,
-        replacement_type: Some(parse_quote!(::win_etw_provider::types::FILETIME)),
+        replacement_type: Some(parse_quote!(::win_etw_provider::FILETIME)),
     }
     HRESULT: HRESULT => {
         is_ref: false,

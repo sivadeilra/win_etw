@@ -1,8 +1,10 @@
 [workspace]
 members = [
-    "win_etw_provider",
+    "examples/hello_world",
+    "win_etw_consumer",
     "win_etw_logger",
+    "win_etw_log_watcher",
     "win_etw_macros",
     "win_etw_metadata",
-    "examples/hello_world"
+    "win_etw_provider"
 ]

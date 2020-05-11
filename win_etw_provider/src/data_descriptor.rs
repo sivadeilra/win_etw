@@ -4,29 +4,35 @@ use core::mem::size_of;
 use widestring::U16CStr;
 use zerocopy::AsBytes;
 
-/// This type is equivalent to the Win32 structure `EVENT_DATA_DESCRIPTOR`, and its representation
-/// is guaranteed to be equivalent.
+/// Contains a reference to the data for an event field. The type of the data is not specified in
+/// this structure; instead, the type of the data is stored in the event's metadata.
+/// (See `win_etw_metadata::InFlag`.)
 ///
-/// This type represents a dynamically-typed pointer to data. The type of the pointed-to data is
-/// determined by the eventing system. This type provides many implementations of `From` that
-/// convert from references to data (represented using Rust types) to byte pointers to this data.
-/// This is why this type has a reference lifetime; it tracks the lifetime of the data that it
-/// points to.
+/// The data that this type points to must have a well-defined (stable) byte representation. For
+/// example, `u32` has a well-defined byte representation, as long as there is agreement about
+/// whether the value is stored in big-endian or little-endian order. Similarly, `[u8]` and
+/// `[u32]` have well-defined byte representations. However, types such as `[bool]` do not have a
+/// stable byte representation, and so `EventDataDescriptor` cannot point to `&[bool]`.
 ///
+/// This type provides implementations of `From` that can be used to point to event data.
 /// All of the `EventDataDescriptor::From` implementations for types require that the types have a
 /// stable, guaranteed byte representation, and that is legal (meaningful) to read that byte
 /// representation.
 ///
-/// # Warning!
+/// This type is equivalent to the Win32 structure `EVENT_DATA_DESCRIPTOR`, and its representation
+/// is guaranteed to be equivalent.
+///
+/// # Implementation warning!
 ///
 /// This code is responsible for ensuring memory safety. Even though it contains only simple
 /// primitives, these primitives are actually native pointers and pointer bounds. This data
 /// structure is passed to the ETW implementation, which dereferences those pointers. The Rust
-/// type checker cannot "see" these dereferences, so it does not know that `EventDataDescriptor`
-/// deals with memory safety. This is why the `phantom_ref` field exists, and it is _crucial_ that
-/// this code be used and encapsulated correctly.
+/// type checker cannot "see" these dereferences, since they occur in non-Rust code, so the borrow
+/// checker does not know that `EventDataDescriptor` deals with memory safety. This is why the
+/// `phantom_ref` field exists, and it is _crucial_ that this code be used and encapsulated
+/// correctly.
 ///
-/// For type safety to be conserved, the following invariants MUST be maintained:
+/// For type safety to be conserved, the following invariants *must* be maintained:
 ///
 /// * The `'a` lifetime parameter of `EventDataDescriptor<'a>` must be correctly associated with
 ///   the lifetime of any reference that is used to construct an instance of `EventDataDescriptor`.
@@ -53,11 +59,34 @@ pub struct EventDataDescriptor<'a> {
 }
 
 impl EventDataDescriptor<'static> {
+    /// Returns an empty data descriptor.
     pub fn empty() -> Self {
         Self {
             ptr: 0,
             size: 0,
             kind: 0,
+            phantom_ref: PhantomData,
+        }
+    }
+
+    /// Creates an `EventDataDescriptor` for provider metadata.
+    /// Provider metadata is required to have `'static` lifetime.
+    pub fn for_provider_metadata(s: &'static [u8]) -> Self {
+        Self {
+            ptr: s.as_ptr() as usize as u64,
+            size: s.len() as u32,
+            kind: EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA,
+            phantom_ref: PhantomData,
+        }
+    }
+
+    /// Creates an `EventDataDescriptor` for the metadata that describes a single event.
+    /// Event metadata is required to have `'static` lifetime.
+    pub fn for_event_metadata(s: &'static [u8]) -> Self {
+        Self {
+            ptr: s.as_ptr() as usize as u64,
+            size: s.len() as u32,
+            kind: EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA,
             phantom_ref: PhantomData,
         }
     }
@@ -67,10 +96,12 @@ const EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA: u32 = 2;
 const EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA: u32 = 1;
 
 impl<'a> EventDataDescriptor<'a> {
+    #[cfg(DISABLED)]
     pub fn is_empty(&self) -> bool {
         self.ptr == 0 && self.size == 0
     }
 
+    /// Creates a `EventDataDescriptor for a slice of bytes.
     pub fn for_bytes(s: &'a [u8]) -> Self {
         Self {
             ptr: s.as_ptr() as usize as u64,
@@ -80,24 +111,7 @@ impl<'a> EventDataDescriptor<'a> {
         }
     }
 
-    pub fn for_provider_metadata(s: &'a [u8]) -> Self {
-        Self {
-            ptr: s.as_ptr() as usize as u64,
-            size: s.len() as u32,
-            kind: EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA,
-            phantom_ref: PhantomData,
-        }
-    }
-
-    pub fn for_event_metadata(s: &'a [u8]) -> Self {
-        Self {
-            ptr: s.as_ptr() as usize as u64,
-            size: s.len() as u32,
-            kind: EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA,
-            phantom_ref: PhantomData,
-        }
-    }
-
+    #[cfg(DISABLED)]
     pub fn from_as_bytes<T: AsBytes>(s: &'a T) -> Self {
         Self::for_bytes(s.as_bytes())
     }

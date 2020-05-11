@@ -82,16 +82,10 @@ bitflags! {
     pub struct InFlag: u8 {
         /// No value at all
         const NULL = 0;
-        /// A counted wide string (UTF-16), corresponding to `UNICODE_STRING` in Win32.
-        /// This type uses two data descriptor slots. The first is a `u16` value, giving the
-        /// length of the string data in WCHAR units (not bytes). The second points to the
-        /// character data.
+        /// A wide string (UTF-16), corresponding to `PCWSTR` in Win32.
         const UNICODE_STRING = 1;
-        /// A counted ANSI string, corresponding to `STRING` in Win32.
+        /// An ANSI string, corresponding to `PCSTR` in Win32.
         /// The character set can be specified as UTF-8 by using `OutFlag::UTF8`.
-        /// This type uses two data descriptor slots. The first is a `u16` value, giving the
-        /// length of the string data in WCHAR units (not bytes). The second points to the
-        /// character data.
         const ANSI_STRING = 2;
         /// `i8`
         const INT8 = 3;

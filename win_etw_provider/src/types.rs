@@ -1,9 +1,10 @@
 use crate::EventDataDescriptor;
-use zerocopy::AsBytes;
+use zerocopy::{AsBytes, FromBytes};
 
-pub use crate::guid::GUID;
-
+/// The value used in `SocketAddrV4::family` to identify IPv4 addresses.
 pub const AF_INET: u16 = 2;
+
+/// The value used in `SocketAddrV6::family` to identify IPv6 addresses.
 pub const AF_INET6: u16 = 23;
 
 /// This has the same in-memory representation as the Win32 SOCKADDR_IN structure.
@@ -11,9 +12,13 @@ pub const AF_INET6: u16 = 23;
 #[repr(C)]
 #[derive(AsBytes, Clone)]
 pub struct SocketAddrV4 {
+    /// Address family identifier.
     pub family: u16,
+    /// Port identifier, stored in big-endian form.
     pub port: [u8; 2],
+    /// IPv4 address, stored in big-endian form.
     pub address: [u8; 4],
+    /// Zero padding.
     pub zero: [u8; 8],
 }
 
@@ -36,13 +41,19 @@ impl<'a> From<&'a crate::types::SocketAddrV4> for EventDataDescriptor<'a> {
     }
 }
 
+/// See `[SOCKADDR_IN6_LH](https://docs.microsoft.com/en-us/windows/win32/api/ws2ipdef/ns-ws2ipdef-sockaddr_in6_lh)`.
 #[repr(C)]
-#[derive(AsBytes, Clone)]
+#[derive(Clone, AsBytes, FromBytes)]
 pub struct SocketAddrV6 {
+    /// Address family identifier.
     pub family: u16,
+    /// Port identifier, stored in big-endian form.
     pub port: [u8; 2],
+    /// IPv6 flow info.
     pub flow_info: [u8; 4],
+    /// IPv6 address.
     pub address: [u8; 16],
+    /// IPv6 scope.
     pub scope_id: [u8; 4],
 }
 
@@ -65,6 +76,7 @@ impl<'a> From<&'a crate::types::SocketAddrV6> for EventDataDescriptor<'a> {
     }
 }
 
+/// See `[FILETIME](https://docs.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime)`.
 #[repr(transparent)]
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct FILETIME(pub u64);
