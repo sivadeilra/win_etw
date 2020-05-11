@@ -535,7 +535,10 @@ fn trace_logging_events_core(attr: TokenStream, item_tokens: TokenStream) -> Tok
             pub fn new() -> Self {
                 let provider = match ::win_etw_provider::EtwProvider::new(&Self::PROVIDER_GUID) {
                     Ok(mut provider) => {
-                        let _ = provider.register_provider_metadata(&#provider_metadata_ident);
+                        #[cfg(target_os = "windows")]
+                        {
+                            let _ = provider.register_provider_metadata(&#provider_metadata_ident);
+                        }
                         Some(provider)
                     }
                     Err(_) => None,
@@ -613,7 +616,7 @@ fn create_provider_metadata(provider_name: &str, provider_metadata_ident: &Ident
         #[link_section = ".rdata$etw2"]
         #[used]
         #[allow(non_upper_case_globals)]
-        // #[cfg(target_os = "windows")]
+        #[cfg(target_os = "windows")]
         static #provider_metadata_ident: [u8; #provider_metadata_len] = [
             #(
                 #provider_metadata,
@@ -1037,7 +1040,7 @@ impl syn::parse::Parse for ProviderAttributes {
             });
         }
 
-        // TODO: We could generate a deterministic GUID by hashing the event provider name or the
+        // We could generate a deterministic GUID by hashing the event provider name or the
         // signatures of the event methods. Both of those approaches have problems, unfortunately.
         // It's best to require developers to specify a GUID.
         //

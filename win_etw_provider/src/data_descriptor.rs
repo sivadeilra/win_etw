@@ -96,11 +96,6 @@ const EVENT_DATA_DESCRIPTOR_TYPE_PROVIDER_METADATA: u32 = 2;
 const EVENT_DATA_DESCRIPTOR_TYPE_EVENT_METADATA: u32 = 1;
 
 impl<'a> EventDataDescriptor<'a> {
-    #[cfg(DISABLED)]
-    pub fn is_empty(&self) -> bool {
-        self.ptr == 0 && self.size == 0
-    }
-
     /// Creates a `EventDataDescriptor for a slice of bytes.
     pub fn for_bytes(s: &'a [u8]) -> Self {
         Self {
@@ -109,11 +104,6 @@ impl<'a> EventDataDescriptor<'a> {
             kind: 0,
             phantom_ref: PhantomData,
         }
-    }
-
-    #[cfg(DISABLED)]
-    pub fn from_as_bytes<T: AsBytes>(s: &'a T) -> Self {
-        Self::for_bytes(s.as_bytes())
     }
 }
 

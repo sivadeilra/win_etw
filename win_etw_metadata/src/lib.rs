@@ -110,7 +110,6 @@ bitflags! {
         /// A Win32 'BOOL' value, which is `i32`, stored in little-endian form.
         const BOOL32 = 13;
         /// An array of bytes, stored in little-endian form.
-        /// TODO: does this use one or two data descriptors?
         const BINARY = 14;
         /// A `GUID`, stored in canonical byte-oriented representation. The fields within the `GUID`
         /// are stored in big-endian form.
