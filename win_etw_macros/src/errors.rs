@@ -2,9 +2,10 @@ use proc_macro2::Span;
 use syn::Error;
 
 #[derive(Default)]
-pub struct CombinedErrors {
+pub(crate) struct CombinedErrors {
     error: Option<Error>,
 }
+
 impl CombinedErrors {
     pub fn push(&mut self, error: Error) {
         match self.error.as_mut() {
@@ -12,7 +13,7 @@ impl CombinedErrors {
             None => self.error = Some(error),
         }
     }
-    pub fn to_result<T>(self, value: T) -> Result<T, Error> {
+    pub fn into_result<T>(self, value: T) -> Result<T, Error> {
         match self.error {
             Some(error) => Err(error),
             None => Ok(value),
@@ -33,7 +34,7 @@ impl CombinedErrors {
     }
 }
 
-pub struct ErrorScope<'a> {
+pub(crate) struct ErrorScope<'a> {
     span: Span,
     errors: &'a mut CombinedErrors,
 }

@@ -1059,7 +1059,7 @@ Example: #[trace_logging_provider(guid = \"123e4567-e89b...\")]",
             Uuid::nil()
         };
 
-        errors.to_result(ProviderAttributes {
+        errors.into_result(ProviderAttributes {
             uuid,
             provider_name,
         })
