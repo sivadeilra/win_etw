@@ -10,8 +10,8 @@ homepage = "https://github.com/sivadeilra/win_etw"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-log = { version = "0.4.8", features = ["std"] }
+log = { version = "^0.4", features = ["std"] }
 win_etw_provider = { path = "../win_etw_provider" }
 win_etw_macros = { path = "../win_etw_macros" }
 win_etw_metadata = { path = "../win_etw_metadata" }
-winapi = { version = "0.3.8" }
+winapi = { version = "^0.3.8" }

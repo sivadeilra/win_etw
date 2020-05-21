@@ -13,11 +13,11 @@ proc-macro = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-proc-macro2 = "1.0.9"
-syn = { version = "1.0.18", features = ["full", "extra-traits"] }
-quote = "1.0.3"
+proc-macro2 = "^1.0"
+syn = { version = "^1.0", features = ["full", "extra-traits"] }
+quote = "^1.0"
 win_etw_metadata = { path = "../win_etw_metadata" }
-uuid = { version = "0.8.1" }
+uuid = { version = "^0.8" }
 
 [dev-dependencies]
 win_etw_provider = { path = "../win_etw_provider" }
