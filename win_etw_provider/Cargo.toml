@@ -12,7 +12,6 @@ homepage = "https://github.com/sivadeilra/win_etw"
 [dependencies]
 widestring = "^0.4"
 zerocopy = "^0.3"
-win_etw_macros = { version = "^0.1", path = "../win_etw_macros" }
 win_etw_metadata = { version = "^0.1", path = "../win_etw_metadata" }
 
 [target.'cfg(windows)'.dependencies]
